@@ -1,0 +1,40 @@
+/* GIT Hub path would be \fusion\Claims *\
+
+/*Alter Script
+--------------
+Compile the below objects in PAAS CLAIMS Schema.
+*/
+
+alter table XXTWC_CLAIMS_HEADERS ADD SHORTPAY VARCHAR2(1) default 'N';
+alter table XXTWC_CLAIMS_HEADERS ADD MISSING_LOT VARCHAR2(1);
+
+/*
+Packages Spec Script
+--------------
+Compile the below objects in PAAS CLAIMS Schema
+*/
+
+\fusion\Claims\Packages\XXTWC_CLAIMS_EMAIL_NOTFICATION_PKG.pks
+\fusion\Claims\Packages\XXTWC_CLAIMS_WF_PKG.pks
+\fusion\Claims\Packages\XXTWC_CLAIMS_INSUPD_PKG.pks
+\fusion\Claims\Packages\XXTWC_CLAIMS_VALIDATION_PKG.pks
+
+/*
+Package Body Script
+-------------
+Compile the below objects in PAAS CLAIMS Schema
+*/
+
+\fusion\Claims\PackageBodies\XXTWC_CLAIMS_EMAIL_NOTFICATION_PKG.pkb
+\fusion\Claims\PackageBodies\XXTWC_CLAIMS_WF_PKG.pkb
+\fusion\Claims\PackageBodies\XXTWC_CLAIMS_INSUPD_PKG.pkb
+\fusion\Claims\PackageBodies\XXTWC_CLAIMS_VALIDATION_PKG.pkb
+
+/*
+Run Apex Application Script 
+-------------
+Import file from the Apex Workspace OR Run the scripts in XXAPPS schema
+*/
+
+\fusion\Claims\Apex\f225_init.sql
+\fusion\Claims\Apex\f225.sql
