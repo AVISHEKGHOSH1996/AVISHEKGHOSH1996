@@ -293,3 +293,247 @@ BEGIN
   emp.display_address();  -- call object method to display details
 END;
 /
+
+---------------------------------------------------------------------------------------
+
+
+-------------------Tested---------------
+----CURSOR FOR LOOP---------------
+DECLARE
+/*Here we declare cursor*/
+    CURSOR EMP1 IS
+/*here we write our sql code*/
+    SELECT
+        EMPNO,
+        ENAME,
+        SAL
+    FROM
+        emp 
+        where sal between 0 and 1800;
+BEGIN
+/*test*/
+    FOR i IN EMP1 LOOP
+        dbms_output.put_line(i.EMPNO || ',' || i.ENAME || ',' || i.SAL);
+    END LOOP;
+END;
+---------------------------------------------------------------------------------
+-------FOR LOOP---------------
+BEGIN
+FOR I IN (SELECT
+        EMPNO,
+        ENAME,
+        SAL
+    FROM
+        emp where sal between 0 and 1800 )
+        LOOP
+        dbms_output.put_line(i.EMPNO || ',' || i.ENAME || ',' || i.SAL);
+        END LOOP;
+        END;
+----------------------------------------------------------------------------
+
+Declare 
+cursor CHRTRT
+IS 
+
+SELECT CLAIM_NUMBER,CLAIM_ID FROM XXTWC_CLAIMS_HEADERS; --WHERE CLAIM_ID = 873;
+BEGIN
+FOR I IN CHRTRT
+LOOP
+dbms_output.put_line (I.CLAIM_NUMBER || ',' || I.CLAIM_ID);
+END LOOP ;
+END;
+-------------------------------------------------------------------------------
+BEGIN
+FOR I IN (SELECT CLAIM_NUMBER,CLAIM_ID FROM XXTWC_CLAIMS_HEADERS WHERE CLAIM_ID = 873)
+LOOP
+dbms_output.put_line (I.CLAIM_NUMBER || ' , ' || I.CLAIM_ID);
+END LOOP;
+END;
+-------------------------------------------------------
+BEGIN
+FOR I IN (SELECT SALARY FROM EMP WHERE MOD(EMPNO,2)=0)
+LOOP
+UPDATE EMP
+SET SALARY = SALARY + 1000
+WHERE SALARY = I.SALARY ;--AND MOD(EMPNO,2)=0;
+dbms_output.put_line (I.SALARY);
+END LOOP;
+END;
+-----------------------------------------
+
+SELECT MAX(SALARY) FROM EMP
+WHERE SALARY < (SELECT max(SALARY) FROM EMP 
+WHERE SALARY < (SELECT max(SALARY) FROM EMP WHERE SALARY < (SELECT max(SALARY) FROM EMP))); --Fourth highest salary 
+------------------------------------------------------------------------------------------------
+DECLARE
+    CURSOR c_person IS
+    SELECT
+        person_id,
+        first_name,
+        last_name,
+        address,
+        city,
+        salary
+    FROM
+        person;
+
+BEGIN
+    FOR i IN c_person LOOP
+        dbms_output.put_line(i.person_id
+                             || ' '
+                             || i.first_name
+                             || ' '
+                             || i.last_name
+                             || ' '
+                             || i.address
+                             || ' '
+                             || i.city
+                             || ' '
+                             || i.salary);
+    END LOOP;
+END;
+
+DECLARE
+    CURSOR c_department IS
+    SELECT
+        dept_id,
+        dept_name,
+        dept_desc,
+        status
+    FROM
+        department;
+
+BEGIN
+    FOR i IN c_department LOOP
+        dbms_output.put_line(i.dept_id
+                             || ' '
+                             || i.dept_name
+                             || ' '
+                             || i.dept_desc
+                             || ' '
+                             || i.status);
+    END LOOP;
+END;
+
+DECLARE
+    CURSOR c_city IS
+    SELECT
+        city_id,
+        city_name
+    FROM
+        cities;
+
+BEGIN
+    FOR i IN c_city LOOP
+        dbms_output.put_line(i.city_id
+                             || ' '
+                             || i.city_name);
+    END LOOP;
+END;
+
+DECLARE 
+X VARCHAR2(50);
+BEGIN
+X := GETDNAME(1);
+DBMS_OUTPUT.PUT_LINE(X);
+END
+
+DECLARE 
+CURSOR  C_EMPLOYEE IS
+        SELECT EMP_ID,FIRST_NAME FROM EMP;
+        BEGIN 
+        FOR R_EMP IN  C_EMPLOYEE
+        LOOP
+        DBMS_OUTPUT.PUT_LINE(R_EMP.EMP_ID||' '||R_EMP.FIRST_NAME);
+        END LOOP;
+        END;
+		
+DECLARE 
+CURSOR C_EMP IS
+SELECT EMP_ID,FIRST_NAME,CITY,SALARY FROM EMP;
+BEGIN 
+FOR I IN C_EMP LOOP
+UPDATE EMP
+SET SALARY = SALARY + 1000
+WHERE SALARY =I.SALARY AND DEPT_ID=2;
+DBMS_OUTPUT.PUT_LINE (I.EMP_ID||' '||I.FIRST_NAME||' '||I.CITY||' '||I.SALARY);
+END LOOP;
+END;
+----------------------------------------
+DECLARE
+CURSOR SAL1 IS
+SELECT SALARY FROM EMP;
+BEGIN 
+FOR I IN SAL1
+LOOP
+UPDATE EMP
+SET SALARY = SALARY + 1000
+WHERE SALARY = I.SALARY AND MOD(EMPNO,2)=0;
+dbms_output.put_line (I.SALARY);
+END LOOP;
+END;
+
+----OR-------------
+BEGIN
+FOR I IN (SELECT SALARY FROM EMP)
+LOOP
+UPDATE EMP
+SET SALARY = SALARY + 1000
+WHERE SALARY = I.SALARY AND MOD(EMPNO,2)=0;
+dbms_output.put_line (I.SALARY);
+END LOOP;
+END;
+---------------------------
+DECLARE 
+GRADE CHAR(1) :='Z';
+BEGIN
+CASE GRADE 
+WHEN 'A' THEN DBMS_OUTPUT.PUT_LINE('EXCELLENT');
+WHEN 'B' THEN DBMS_OUTPUT.PUT_LINE('VERY GOOD');
+WHEN 'C' THEN DBMS_OUTPUT.PUT_LINE('GOOD');
+WHEN 'E' THEN DBMS_OUTPUT.PUT_LINE('WELL DONE');
+WHEN 'F' THEN DBMS_OUTPUT.PUT_LINE('FAIL');
+ELSE  DBMS_OUTPUT.PUT_LINE('NO SUCH GRADE');
+END CASE;
+END;
+
+DECLARE  
+   a
+number(3) := 500;
+
+BEGIN  
+   -- check the boolean condition using if statement   
+    IF ( a < 20 ) THEN  
+      -- if condition is true then print the following    
+        dbms_output.put_line('a is less than 20 ');
+    ELSE
+        dbms_output.put_line('a is not less than 20 ');
+    END IF;
+
+    dbms_output.put_line('value of a is : ' || a);
+END; 
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------cursor-------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------------------------
+declare
+e_id ALPM_EMP_DETAILS.emp_id%TYPE;
+e_name ALPM_EMP_DETAILS.first_name%TYPE;
+e_sal ALPM_EMP_DETAILS.starting_salary%TYPE;
+cursor c_1 is (select emp_id,first_name,starting_salary from ALPM_EMP_DETAILS);
+begin
+open c_1;
+loop
+fetch c_1 into e_id,e_name,e_sal ;
+EXIT WHEN c_1%notfound;
+dbms_output.put_line(e_id||' '||e_name||' '||nvl(to_number(e_sal+1000),0));
+end loop;
+close c_1;
+end;
+
+
+
+
