@@ -1,0 +1,295 @@
+DECLARE
+
+LV_EMPLOYEE_TAB EMPLOYEE %ROWTYPE;
+
+BEGIN 
+SELECT * INTO LV_EMPLOYEE_TAB
+FROM EMPLOYEE WHERE EMP_ID = 3;
+DBMS_OUTPUT.PUT_LINE (LV_EMPLOYEE_TAB.FIRST_NAME||' '|| LV_EMPLOYEE_TAB.LAST_NAME);
+END;
+------------------------------------------------------------------------------------------
+-----Cursor based record datatype---------
+
+DECLARE
+/*Declare cursor*/
+CURSOR CUR_EMP IS
+SELECT FIRST_NAME , LAST_NAME , SALARY 
+FROM EMPLOYEE WHERE EMP_ID > 1;
+/*Declare record*/
+VAR_EMP CUR_EMP %ROWTYPE;
+
+BEGIN
+OPEN CUR_EMP;
+LOOP
+FETCH CUR_EMP INTO VAR_EMP;
+DBMS_OUTPUT.PUT_LINE(VAR_EMP.FIRST_NAME || ' '||VAR_EMP.LAST_NAME|| ' salary is '||VAR_EMP.SALARY);
+exit when CUR_EMP %NOTFOUND;
+END LOOP;
+CLOSE CUR_EMP;
+END;
+--------------------------------------------------------------------------
+------------CURSOR---
+DECLARE
+/*Declare cursor*/
+CURSOR CUR_EMP IS
+SELECT FIRST_NAME , LAST_NAME , SALARY 
+FROM EMPLOYEE WHERE EMP_ID > 1;
+/*Declare record*/
+--VAR_EMP CUR_EMP %ROWTYPE;
+LV_FIRST_NAME VARCHAR2(100);
+LV_LAST_NAME  VARCHAR2(100);
+LV_SALARY  NUMBER;
+BEGIN
+OPEN CUR_EMP;
+LOOP
+FETCH CUR_EMP INTO LV_FIRST_NAME, LV_LAST_NAME, LV_SALARY;
+DBMS_OUTPUT.PUT_LINE(LV_FIRST_NAME || ' '||LV_LAST_NAME|| ' salary is '||LV_SALARY);
+exit when CUR_EMP %NOTFOUND;
+END LOOP;
+CLOSE CUR_EMP;
+END;
+---------------------------------------------------------------------------
+
+
+
+----Parameter based cursor----
+
+DECLARE
+/*Declare cursor*/
+CURSOR CUR_EMP(P_EMP_ID NUMBER) IS
+SELECT FIRST_NAME , LAST_NAME , SALARY 
+FROM EMPLOYEE WHERE EMP_ID > P_EMP_ID;
+/*Declare record*/
+VAR_EMP CUR_EMP %ROWTYPE;
+
+BEGIN
+OPEN CUR_EMP(1000);
+LOOP
+FETCH CUR_EMP INTO VAR_EMP;
+DBMS_OUTPUT.PUT_LINE(VAR_EMP.FIRST_NAME || ' '||VAR_EMP.LAST_NAME|| ' salary is '||VAR_EMP.SALARY);
+exit when CUR_EMP %NOTFOUND;
+END LOOP;
+CLOSE CUR_EMP;
+END;
+------------------------------------------------------------------------------------
+----Cursor For LOOP-------
+
+DECLARE
+/*Declare cursor*/
+CURSOR CUR_EMP(P_EMP_ID NUMBER) IS
+SELECT FIRST_NAME , LAST_NAME , SALARY 
+FROM EMPLOYEE WHERE EMP_ID > P_EMP_ID;
+/*Declare record*/
+--VAR_EMP CUR_EMP %ROWTYPE;
+
+BEGIN
+FOR I IN CUR_EMP(1)
+LOOP
+
+UPDATE EMPLOYEE
+SET SALARY = SALARY + 1000;
+
+
+DBMS_OUTPUT.PUT_LINE(I.FIRST_NAME||' '||I.LAST_NAME|| ' Salary is '||I.SALARY);
+END LOOP;
+END;
+---------------------------------------------------------------------------------------------
+----User Drfine Record Data Type-------------------------
+
+DECLARE
+
+TYPE RV_EMP IS RECORD(
+    First_Name EMPLOYEE.FIRST_NAME %TYPE,
+    Last_name  EMPLOYEE.LAST_NAME %TYPE,
+    Dept_name DEPARTMENT.DEPT_NAME %TYPE
+);
+
+V_EMP_INFO  RV_EMP;
+
+BEGIN
+
+SELECT FIRST_NAME, LAST_NAME, DEPT_NAME INTO 
+V_EMP_INFO.First_Name, V_EMP_INFO.Last_name, V_EMP_INFO.Dept_name
+FROM EMPLOYEE E, DEPARTMENT D
+WHERE E.DEPT_ID = D.DEPT_ID AND E.EMP_ID = 1;
+
+DBMS_OUTPUT.PUT_LINE(V_EMP_INFO.First_Name || ' '|| V_EMP_INFO.Last_name || ' Department is '|| V_EMP_INFO.Dept_name ||'.');
+
+END;
+
+--------------------------------------------------------------------------------------------
+--function and function called-----
+
+CREATE OR REPLACE FUNCTION Get_circle_redious(p_redious number)
+return number
+is
+Pi number := 3.14;
+area number;
+begin 
+area := pi * p_redious * p_redious;
+return area;
+end;
+
+declare 
+lv_result number;
+begin 
+lv_result := Get_circle_redious (25);
+dbms_output.put_line (lv_result);
+end;
+--------------------------------------------------------------------------------
+---CURSOR FOR LOOP----
+DECLARE
+
+CURSOR CUR_EMP IS
+ (SELECT FIRST_NAME , LAST_NAME ,SALARY FROM EMPLOYEE
+WHERE EMP_ID > 1);
+
+--VAR_EMP CUR_EMP %ROWTYPE;
+
+BEGIN
+FOR I IN CUR_EMP
+LOOP
+DBMS_OUTPUT.PUT_LINE(I.First_Name || ' '|| I.Last_name || ' Department is '|| I.SALARY ||'.');
+END LOOP;
+END; 
+---------------------------------------------------
+---FOR LOOP---
+BEGIN 
+FOR I IN (SELECT FIRST_NAME , LAST_NAME ,SALARY FROM EMPLOYEE
+WHERE EMP_ID > 1)
+LOOP
+DBMS_OUTPUT.PUT_LINE(I.First_Name || ' '|| I.Last_name || ' Department is '|| I.SALARY ||'.');
+END LOOP;
+END;
+----------------------------------------------------
+
+
+DECLARE
+var_dividend number := 24;
+var_divisor number := 0;
+var_result  number;
+ex_divzero exception;
+BEGIN
+--if var_divisor = 0 THEN
+RAISE ex_divzero;
+--end if;
+var_result := var_dividend/var_divisor;
+dbms_output.put_line(var_result);
+
+exception when ex_divzero  THEN
+dbms_output.put_line('error!...Your divisor is zero.');
+END;
+
+
+-----------------------------------------------------------------------
+
+DECLARE
+VAR_EMPLOYEE EMPLOYEE %ROWTYPE;  /*Table based record data type*/
+EX_EMPLOYEE_NO_DATA EXCEPTION;
+BEGIN
+
+SELECT 
+FIRST_NAME , 
+LAST_NAME,
+SALARY 
+INTO 
+VAR_EMPLOYEE.FIRST_NAME, 
+VAR_EMPLOYEE.LAST_NAME, 
+VAR_EMPLOYEE.SALARY
+FROM EMPLOYEE
+WHERE EMP_ID = 30;
+
+IF VAR_EMPLOYEE.FIRST_NAME = NULL OR VAR_EMPLOYEE.LAST_NAME = NULL THEN
+RAISE EX_EMPLOYEE_NO_DATA;
+END IF;
+
+dbms_output.put_line(VAR_EMPLOYEE.FIRST_NAME||' '||VAR_EMPLOYEE.LAST_NAME||' salary is '||VAR_EMPLOYEE.SALARY||'.');
+
+EXCEPTION WHEN EX_EMPLOYEE_NO_DATA THEN
+dbms_output.put_line('Error! No_data_found');
+END;
+
+----------------------------------------------------------
+--------------------------------------------------------------------------------------------
+DECLARE
+CURSOR CUR_EMP(P_EMP_ID NUMBER) IS
+SELECT EMP_ID,FIRST_NAME , LAST_NAME , SALARY
+FROM EMPLOYEE WHERE EMP_ID <= P_EMP_ID; --AND FIRST_NAME = P_FIRST_NAME;
+BEGIN
+/*BEGIN
+FOR I IN CUR_EMP(60)
+LOOP
+DBMS_OUTPUT.PUT_LINE (I.FIRST_NAME||' '||I.LAST_NAME);
+END LOOP;
+END;*/
+-----------------------------------------------------------------------------------------
+FOR I IN CUR_EMP(60)
+LOOP
+DBMS_OUTPUT.PUT_LINE (I.FIRST_NAME||' '||I.LAST_NAME||' '||I.SALARY);
+UPDATE EMPLOYEE
+SET SALARY = I.SALARY + 1000 
+WHERE EMP_ID <= I.EMP_ID ;
+DBMS_OUTPUT.PUT_LINE (I.FIRST_NAME||' '||I.LAST_NAME||' '||I.SALARY);
+END LOOP;
+END;
+
+---------------------------------------------------------------------------------------
+
+
+--Defining Object Types--
+CREATE TYPE address_typ AS OBJECT ( 
+   street          VARCHAR2(30),
+   city            VARCHAR2(20),
+   state           CHAR(2),
+   postal_code     VARCHAR2(6) );
+/
+CREATE TYPE employee_typ AS OBJECT (
+  employee_id       NUMBER(6),
+  first_name        VARCHAR2(20),
+  last_name         VARCHAR2(25),
+  email             VARCHAR2(25),
+  phone_number      VARCHAR2(20),
+  hire_date         DATE,
+  job_id            VARCHAR2(10),
+  salary            NUMBER(8,2),
+  commission_pct    NUMBER(2,2),
+  manager_id        NUMBER(6),
+  department_id     NUMBER(4),
+  address           address_typ,
+  MAP MEMBER FUNCTION get_idno RETURN NUMBER,
+  MEMBER PROCEDURE display_address ( SELF IN OUT NOCOPY employee_typ ) );
+/
+CREATE TYPE BODY employee_typ AS
+  MAP MEMBER FUNCTION get_idno RETURN NUMBER IS
+  BEGIN
+    RETURN employee_id;
+  END;
+  MEMBER PROCEDURE display_address ( SELF IN OUT NOCOPY employee_typ ) IS
+  BEGIN
+    DBMS_OUTPUT.PUT_LINE(first_name || ' '  || last_name);
+    DBMS_OUTPUT.PUT_LINE(address.street);
+    DBMS_OUTPUT.PUT_LINE(address.city || ', '  || address.state || ' ' ||
+                         address.postal_code);   
+  END;
+END;
+/
+CREATE TABLE employee_tab OF employee_typ;
+
+
+
+
+---------------------------------------------------------
+---Declaring Objects in a PL/SQL Block----
+
+-- Requires Ex. 3-1
+DECLARE
+  emp employee_typ; -- emp is atomically null
+BEGIN
+-- call the constructor for employee_typ
+  emp := employee_typ(315, 'Francis', 'Logan', 'FLOGAN',
+        '415.555.0100', '01-MAY-04', 'SA_MAN', 11000, .15, 101, 110, 
+         address_typ('376 Mission', 'San Francisco', 'CA', '94222'));
+  DBMS_OUTPUT.PUT_LINE(emp.first_name || ' ' || emp.last_name); -- display details
+  emp.display_address();  -- call object method to display details
+END;
+/
