@@ -1,0 +1,1944 @@
+create or replace PACKAGE BODY XXTWC_FULCRUM_PAAS_SYNC_PKG
+    /*
+    +===========================================================================================+
+    |  Copyright (c) 2017 The Wonderful Company     |         All rights reserved              |
+    +===========================================================================================+
+    |                                                                                          |
+    |  FILENAME : XXTWC_FULCRUM_PAAS_SYNC_PKG.pkb                                            |
+    |                                                                                          |
+    |  DESCRIPTION : This package is used to sync Fulcrum Apps data to PAAS tables              |
+    |                                                                                          |
+    |                                          |
+    |  HISTORY                                                                                 |
+    |                                                                                          |
+    | Version    Date         Author                Description                                 |
+    | =======    ==========   =================     ============================================+
+    | 1.0        19-Feb-2024  Mahender Podavula     Initial version               |
+	| 1.1        22-Apr-2024  Raghuveer             Modification to base the logic on APP ID    |
+    | 1.2        23-Apr-2024  Subhojit Sett         Added function GET_MEDIA_URL                |
+    +===========================================================================================+
+    */
+AS
+PROCEDURE PROCESS_FORM_STRUCTURE
+                                (
+                                    p_ics_run_id    IN     VARCHAR2
+                                  , p_business_unit IN     VARCHAR2
+                                  , p_app_name      IN     VARCHAR2
+								  , p_app_id        IN     VARCHAR2          --Added version 1.1
+                                  , x_form_oic_id       OUT VARCHAR2 
+                                  , x_form_key          OUT VARCHAR2 
+                                  , x_interface_run_id  OUT VARCHAR2
+                                  , x_status            OUT VARCHAR2
+                                  , x_error_msg         OUT VARCHAR2
+                                )
+AS
+    l_interface_run_id VARCHAR2(100);
+    l_procedure        VARCHAR2 (250) := 'PROCESS_FORM_STRUCTURE';
+    l_error_msg        varchar2(4000);
+    l_version_new        varchar2(40);
+    l_version_current        varchar2(40);
+    l_form_oic_id varchar2(4000);
+BEGIN
+x_status    := 'SUCCESS';
+    --    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.1 - x_interface_run_id : '|| x_interface_run_id, p_process_id => x_interface_run_id );
+        --XXTWC_INTERFACE_UTILS_PKG.INITIALIZE_INTERFACE_RUN( p_interface_id => XXTWC_INTERFACE_UTILS_PKG.GET_INTERFACE_ID(p_interface_code => 'GEOTAB_DATAMART') , p_ics_run_id => p_ics_run_id , p_tracking_identifier => NULL , p_description => NULL , p_file_name => NULL , p_file_timestamp => NULL , p_file_content => NULL , x_interface_run_id => l_interface_run_id );
+    --    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.2 - l_interface_run_id : '|| l_interface_run_id, p_process_id => l_interface_run_id );
+    --    x_interface_run_id := l_interface_run_id;
+    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.1 - Form Structure insert Start'
+    ||' - l_interface_run_id - '
+    || l_interface_run_id, p_process_id => p_ics_run_id );
+
+-- Convert Form Structure JSON to XML
+    BEGIN
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    FORMATED_PAYLOAD =
+               (
+                      SELECT
+                             xutl_json.json_to_xml(RAW_PAYLOAD)
+                      FROM
+                             XXTWC_FULCRUM_RAWDATA
+                      WHERE
+                             OIC_ID            = p_ics_run_id
+                             AND BUSINESS_UNIT = p_business_unit
+                             --AND APP_NAME      = p_app_name    --Commented for Version 1.1
+							 AND APP_ID  = p_app_id   --Added for Version 1.1
+                             AND TYPE          = 'FORM'
+               )
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND BUSINESS_UNIT = p_business_unit
+               --AND APP_NAME      = p_app_name   --Commented for Version 1.1
+			   AND APP_ID  = p_app_id   --Added for Version 1.1
+               AND TYPE          = 'FORM'
+        ;
+
+    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.2 - Inserting into XXTWC_FULCRUM_RAWDATA Completed - '
+    ||' - l_interface_run_id - '|| p_ics_run_id, p_process_id => p_ics_run_id );
+
+    EXCEPTION
+    WHEN OTHERS THEN
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.2E - Execption Inserting into XXTWC_FULCRUM_RAWDATA - '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_ics_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := '1.2E - Execption Inserting into XXTWC_FULCRUM_RAWDATA - '
+        ||SUBSTR(SQLERRM,1,2000);
+    END;
+
+    begin
+-- Insert Flat XML data to staging table
+    INSERT INTO "XXICS"."XXTWC_FULCRUM_FORM_STG"
+           ( BUSINESS_UNIT
+                , APP_NAME
+				, APP_ID      --Added for Version 1.1
+                , STATUS
+                , TYPE
+                , OIC_ID
+                , NODE_ID
+                , NODE_NAME
+                , NODE_VALUE
+                , PARENT_NODE_ID
+                , NODE_KIND
+           )
+    SELECT
+           p_business_unit
+         , p_app_name
+		 , p_app_id        --Added for Version 1.1
+         ,'NEW'
+         ,'FORM'
+         , p_ics_run_id
+         , node_id
+         , node_name
+         , node_value
+         , parent_node_id
+         , node_kind
+FROM (
+WITH ALLDATA AS (
+ SELECT
+         x.node_id
+         , x.node_name
+         , x.node_value
+         , x.parent_node_id
+         , x.node_kind
+    FROM
+           XXTWC_FULCRUM_RAWDATA  raw1
+         , XMLTable(
+      'declare function local:getChildren($e as node(), $pID as xs:string?) as element()*
+       {
+         for $i at $p in $e/(child::*|attribute::*)
+         let $ID := if ($pID) then concat($pID,".",$p) else "1"
+         return element r
+         {
+           element node_id {$ID}
+         , element parent_node_id {$pID}
+         , element node_name {name($i)}
+         , if ($i instance of attribute())
+             then ( element node_value {data($i)}, element node_kind {"attribute"} )
+             else ( element node_value {$i/text()}, element node_kind {"element"} )
+         }
+         | local:getChildren($i,$ID)
+       }; (: :)
+       local:getChildren($d,())'
+       passing raw1.FORMATED_PAYLOAD as "d"
+       columns node_id         varchar2(100)   path 'node_id'
+             , node_name       varchar2(30)    path 'node_name'
+             , node_value      varchar2(2000)  path 'node_value'
+             , parent_node_id  varchar2(100)   path 'parent_node_id'
+             , node_kind       varchar2(30)    path 'node_kind'
+      ) x
+    where
+           1                      =1
+           and raw1.oic_id        = p_ics_run_id
+           and raw1.BUSINESS_UNIT = p_business_unit
+           --and raw1.APP_NAME      = p_app_name     --Commented for Version 1.1
+		   and raw1.APP_ID      = p_app_id     --Added for Version 1.1
+           and raw1.TYPE          = 'FORM'
+           )
+           SELECT 
+           alld_hdr.node_id
+             , alld_hdr.node_name
+             , alld_hdr.node_value
+             , alld_hdr.parent_node_id
+             , alld_hdr.node_kind   
+           FROM ALLDATA alld_hdr
+           );
+
+-- Get form new version
+                SELECT 
+                    (select stg_v_s.NODE_VALUE from XXTWC_FULCRUM_FORM_STG stg_v_s where stg_v_s.NODE_ID =  stg_v.PARENT_NODE_ID
+                    and stg_v.oic_id        = stg_v_s.oic_id 
+                    and stg_v.BUSINESS_UNIT = stg_v_s.BUSINESS_UNIT
+                    --and stg_v.APP_NAME      = stg_v_s.APP_NAME   --Commented for Version1.1
+					and stg_v.APP_ID      = stg_v_s.APP_ID    --Added for Version1.1
+                    ) into l_version_new
+                 FROM XXTWC_FULCRUM_FORM_STG stg_v WHERE NODE_NAME = 'key' and node_value = 'version'
+                    and stg_v.oic_id        = p_ics_run_id
+                    and stg_v.BUSINESS_UNIT = p_business_unit
+                    --and stg_v.APP_NAME      = p_app_name   --Commented for Version 1.1
+					and stg_v.APP_ID      = p_app_id      --Added for Version1.1
+                    and stg_v.TYPE          = 'FORM';
+-- Get form current version                     
+                 select nvl(max(version),0),nvl(max(oic_id),'No_FormID') into l_version_current, l_form_oic_id from XXICS.XXTWC_FULCRUM_FORM where 
+                 BUSINESS_UNIT = p_business_unit
+                 --and APP_NAME      = p_app_name;   --Commented for Version 1.1
+				 and APP_ID      = p_app_id;       --Added for Version1.1
+
+-- Get form Key                 
+SELECT 
+                    (select stg_v_s.NODE_VALUE from XXTWC_FULCRUM_FORM_STG stg_v_s where stg_v_s.NODE_ID =  stg_v.PARENT_NODE_ID
+                    and stg_v.oic_id        = stg_v_s.oic_id 
+                    and stg_v.BUSINESS_UNIT = stg_v_s.BUSINESS_UNIT
+                    --and stg_v.APP_NAME      = stg_v_s.APP_NAME         --Commented for Version1.1
+					and stg_v.APP_ID      = stg_v_s.APP_ID               --Added for Version1.1
+                    ) 
+                    into x_form_key
+                 FROM XXTWC_FULCRUM_FORM_STG stg_v WHERE NODE_NAME = 'key' and node_value = 'record_title_key'
+                    and stg_v.oic_id        = p_ics_run_id
+                    and stg_v.BUSINESS_UNIT = p_business_unit
+                    --and stg_v.APP_NAME      = p_app_name   --Commented for Version 1.1
+					and stg_v.APP_ID      = p_app_id  --Added for Version1.1
+                    and stg_v.TYPE          = 'FORM';   
+
+SELECT 
+                    (select stg_v_s.NODE_VALUE from XXTWC_FULCRUM_FORM_STG stg_v_s where stg_v_s.NODE_ID =  stg_v.PARENT_NODE_ID
+                    and stg_v.oic_id        = stg_v_s.oic_id 
+                    and stg_v.BUSINESS_UNIT = stg_v_s.BUSINESS_UNIT
+                    and stg_v.APP_NAME      = stg_v_s.APP_NAME
+                    ) into l_version_new
+                 FROM XXTWC_FULCRUM_FORM_STG stg_v WHERE NODE_NAME = 'key' and node_value = 'version'
+                    and stg_v.oic_id        = p_ics_run_id
+                    and stg_v.BUSINESS_UNIT = p_business_unit
+                    --and stg_v.APP_NAME      = p_app_name   --Commented for Version 1.1
+					and stg_v.APP_ID      = p_app_id    --Added for Version1.1
+                    and stg_v.TYPE          = 'FORM';                 
+
+x_form_oic_id := l_form_oic_id;
+-- Load form structure if there is change in version
+if l_version_new >  l_version_current  then
+x_form_oic_id := p_ics_run_id;
+begin
+
+-- Insert form strucure as per fulcrum app, Fields are in same order as fulcrum app.
+insert into XXICS.XXTWC_FULCRUM_FORM
+               ( BUSINESS_UNIT
+                    , APP_NAME
+					, APP_ID    -- Added for Version1.1
+                    , VERSION
+                    , TYPE
+                    , KEY
+                    , LABEL
+                    , DATA_NAME
+                    , PARENT_NODE_ID
+                    , CHILD_NODE_ID
+                    , FLAT_NODE_COUNT
+                    , ROW_NUM
+                    , STATUS
+                    , OIC_ID
+               )
+
+    SELECT
+    BUSINESS_UNIT,
+    APP_NAME,
+	APP_ID,     --Added for Version1.1
+    VERSION,
+    TYPE,
+    KEY,
+    LABEL,
+    DATA_NAME,
+    PARENT_NODE_ID,
+    CHILD_NODE_ID,
+    FLAT_NODE_COUNT,
+    ROWNUM,
+    STATUS,
+    OIC_ID FROM
+ (
+            SELECT 
+                 BUSINESS_UNIT BUSINESS_UNIT
+                , APP_NAME APP_NAME
+				, APP_ID APP_ID -- Added for Version1.1
+                ,l_version_new VERSION
+                ,(select alld_typ.node_value from XXTWC_FULCRUM_FORM_STG alld_typ where alld_typ.node_id = substr(REC_STG.parent_node_id,1,instr(REC_STG.parent_node_id,'.',1,regexp_count(replace(REC_STG.parent_node_id,'.','_'),'_'))-1)||'.1' 
+                    and alld_typ.oic_id = REC_STG.oic_id 
+                    and alld_typ.BUSINESS_UNIT = REC_STG.BUSINESS_UNIT
+                    --and alld_typ.APP_NAME      = REC_STG.APP_NAME    --Commented for Version1.1
+					and alld_typ.APP_ID      = REC_STG.APP_ID        --Added for Version1.1
+                ) TYPE
+                ,(select alld_typ.node_value from XXTWC_FULCRUM_FORM_STG alld_typ where alld_typ.node_id = substr(REC_STG.parent_node_id,1,instr(REC_STG.parent_node_id,'.',1,regexp_count(replace(REC_STG.parent_node_id,'.','_'),'_'))-1)||'.2'
+                    and alld_typ.oic_id = REC_STG.oic_id 
+                    and alld_typ.BUSINESS_UNIT = REC_STG.BUSINESS_UNIT
+                    --and alld_typ.APP_NAME      = REC_STG.APP_NAME     --Commented for Version1.1
+					and alld_typ.APP_ID      = REC_STG.APP_ID           --Added for Version1.1
+     					) key
+                ,(select alld_typ.node_value from XXTWC_FULCRUM_FORM_STG alld_typ where alld_typ.node_id = substr(REC_STG.parent_node_id,1,instr(REC_STG.parent_node_id,'.',1,regexp_count(replace(REC_STG.parent_node_id,'.','_'),'_'))-1)||'.3'
+                    and alld_typ.oic_id = REC_STG.oic_id 
+                    and alld_typ.BUSINESS_UNIT = REC_STG.BUSINESS_UNIT
+                    --and alld_typ.APP_NAME      = REC_STG.APP_NAME   --Commented for Version1.1
+					and alld_typ.APP_ID      = REC_STG.APP_ID         --Added for Version1.1
+					) label
+                ,(select alld_typ.node_value from XXTWC_FULCRUM_FORM_STG alld_typ where alld_typ.node_id = substr(REC_STG.parent_node_id,1,instr(REC_STG.parent_node_id,'.',1,regexp_count(replace(REC_STG.parent_node_id,'.','_'),'_'))-1)||'.8'
+                    and alld_typ.oic_id = REC_STG.oic_id 
+                    and alld_typ.BUSINESS_UNIT = REC_STG.BUSINESS_UNIT
+                    --and alld_typ.APP_NAME      = REC_STG.APP_NAME     --Commented for Version1.1
+					and alld_typ.APP_ID      = REC_STG.APP_ID       --Added for Version1.1   
+					) data_name
+                , PARENT_NODE_ID PARENT_NODE_ID
+                , NODE_ID CHILD_NODE_ID
+                ,REGEXP_COUNT(REPLACE(PARENT_NODE_ID,'.','-'),'-') FLAT_NODE_COUNT
+                ,'NEW' STATUS
+                , OIC_ID OIC_ID
+            FROM XXTWC_FULCRUM_FORM_STG REC_STG
+   where
+           1                      =1
+           and REC_STG.oic_id        = p_ics_run_id
+           and REC_STG.BUSINESS_UNIT = p_business_unit
+           --and REC_STG.APP_NAME      = p_app_name  --Commented for Version1.1
+		   and REC_STG.APP_ID      = p_app_id        --Added for Version1.1
+           and REC_STG.TYPE          = 'FORM'
+           AND NODE_NAME = 'key' and node_value = 'type'
+           order by
+           to_number(replace(nvl(substr(REC_STG.node_id,1,instr(REC_STG.node_id,'.',1,3)-1),0),'.','')) 
+           ,to_number(nvl(substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,3)+1,instr(REC_STG.node_id,'.',1,4)-instr(REC_STG.node_id,'.',1,3)-1),0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 4 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,4)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,4)+1,instr(REC_STG.node_id,'.',1,5)-instr(REC_STG.node_id,'.',1,4)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 5 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,5)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,5)+1,instr(REC_STG.node_id,'.',1,6)-instr(REC_STG.node_id,'.',1,5)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 6 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,6)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,6)+1,instr(REC_STG.node_id,'.',1,7)-instr(REC_STG.node_id,'.',1,6)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 7 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,7)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,7)+1,instr(REC_STG.node_id,'.',1,8)-instr(REC_STG.node_id,'.',1,7)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 8 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,8)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,8)+1,instr(REC_STG.node_id,'.',1,9)-instr(REC_STG.node_id,'.',1,8)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 9 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,9)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,9)+1,instr(REC_STG.node_id,'.',1,10)-instr(REC_STG.node_id,'.',1,9)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 10 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,10)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,10)+1,instr(REC_STG.node_id,'.',1,11)-instr(REC_STG.node_id,'.',1,10)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 11 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,11)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,11)+1,instr(REC_STG.node_id,'.',1,12)-instr(REC_STG.node_id,'.',1,11)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 12 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,12)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,12)+1,instr(REC_STG.node_id,'.',1,13)-instr(REC_STG.node_id,'.',1,12)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 13 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,13)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,13)+1,instr(REC_STG.node_id,'.',1,14)-instr(REC_STG.node_id,'.',1,13)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 14 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,14)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,14)+1,instr(REC_STG.node_id,'.',1,15)-instr(REC_STG.node_id,'.',1,14)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 15 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,15)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,15)+1,instr(REC_STG.node_id,'.',1,16)-instr(REC_STG.node_id,'.',1,15)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 16 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,16)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,16)+1,instr(REC_STG.node_id,'.',1,17)-instr(REC_STG.node_id,'.',1,16)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 17 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,17)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,17)+1,instr(REC_STG.node_id,'.',1,18)-instr(REC_STG.node_id,'.',1,17)-1)
+           end,0))
+           ,to_number(nvl(case when regexp_count(replace(REC_STG.node_id,'.','_'),'_') = 18 then
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,18)+1,length(REC_STG.node_id))
+           else
+           substr(REC_STG.node_id,instr(REC_STG.node_id,'.',1,18)+1,instr(REC_STG.node_id,'.',1,19)-instr(REC_STG.node_id,'.',1,18)-1)
+           end,0))
+           )
+           WHERE TYPE <> 'status_field';
+
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'SUCCESS'
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'FORM'
+               AND BUSINESS_UNIT = p_business_unit
+               --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+        ;
+
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.2.1 - Form Structure insert complete'
+        ||' - l_interface_run_id - '
+        || l_interface_run_id, p_process_id => p_ics_run_id );
+    EXCEPTION
+    WHEN OTHERS THEN
+    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.1.1E Exception PROCESS_FORM_STRUCTURE- '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_ics_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := '1.1.1E Exception PROCESS_FORM_STRUCTURE- '
+        ||SUBSTR(SQLERRM,1,2000);
+
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'ERROR'
+             , ERROR_MESSAGE = x_error_msg
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'FORM'
+               AND BUSINESS_UNIT = p_business_unit
+               --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+        ;
+    END;
+    -- Procedure call to Assign levels for each form field
+    if x_status = 'SUCCESS' then
+        XXTWC_FULCRUM_PAAS_SYNC_PKG.ASSIGN_LEVEL(p_ics_run_id,p_business_unit,p_app_name,p_app_id, x_interface_run_id, x_status, x_error_msg);  --Added p_app_id for Version 1.1
+    end if;
+end if;
+
+-- Update the status after inserting into Form table
+IF x_status = 'SUCCESS' THEN 
+UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'SUCCESS'
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'FORM'
+               AND BUSINESS_UNIT = p_business_unit
+                --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+        ;
+        x_status := 'SUCCESS';
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.2 - Form Structure insert complete'
+        ||' - l_interface_run_id - '
+        || l_interface_run_id, p_process_id => p_ics_run_id );
+END IF;
+ EXCEPTION
+    WHEN OTHERS THEN
+
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.1E Exception PROCESS_FORM_STRUCTURE- '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_ics_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := '1.1E Exception PROCESS_FORM_STRUCTURE- '
+        ||SUBSTR(SQLERRM,1,2000);
+
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'ERROR'
+             , ERROR_MESSAGE = x_error_msg
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'FORM'
+               AND BUSINESS_UNIT = p_business_unit
+               --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+        ;
+    END;
+END PROCESS_FORM_STRUCTURE;
+
+PROCEDURE ASSIGN_LEVEL
+                      (
+                          p_ics_run_id    IN     VARCHAR2
+                        , p_business_unit IN     VARCHAR2
+                        , p_app_name      IN     VARCHAR2
+						, p_app_id        IN     VARCHAR2          --Added version 1.1
+                        , x_interface_run_id OUT VARCHAR2
+                        , x_status OUT           VARCHAR2
+                        , x_error_msg OUT        VARCHAR2
+                      )
+AS
+    l_interface_run_id VARCHAR2(100);
+    l_procedure        VARCHAR2(250) := 'ASSIGN_LEVEL';
+    l_error_msg        VARCHAR2(4000);
+    p_level            VARCHAR2(200);
+    l_count_nodes      NUMBER;
+    l_count_nodes_sec  NUMBER;
+    l_row_num          NUMBER;
+    l_parent_node_val  VARCHAR2(200);
+    l_parent_child     VARCHAR2(200);
+BEGIN
+x_status    := 'SUCCESS';
+    BEGIN
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.4 - Assign Level Start'
+        ||' - l_interface_run_id - '
+        || l_interface_run_id, p_process_id => p_ics_run_id );
+-- Get all Repeat headers to identify level        
+        FOR Get_Repeat_Header IN
+        (
+                 select
+                          BUSINESS_UNIT
+                        , APP_NAME
+						, APP_ID    --Added for version1.1
+                        , VERSION
+                        , TYPE
+                        , KEY
+                        , LABEL
+                        , DATA_NAME
+                        , PARENT_NODE_ID
+                        , CHILD_NODE_ID
+                        , FLAT_NODE_COUNT
+                        , ROW_NUM
+                        , STATUS
+                        , OIC_ID
+                        , CREATED_DATE
+                        , LAST_UPDATE_DATE
+                 from
+                          "XXICS"."XXTWC_FULCRUM_FORM"
+                 where
+                          OIC_ID = p_ics_run_id
+                          AND TYPE in( 'Repeatable')
+                          AND BUSINESS_UNIT = p_business_unit
+						  --AND APP_NAME      = p_app_name     --Commented for Version1.1
+						  AND APP_ID      = p_app_id       --Added for Version1.1
+                 ORDER BY
+                          ROW_NUM
+        )
+        LOOP
+            select
+                   count(1)
+            into
+                   l_count_nodes
+            from
+                   "XXICS"."XXTWC_FULCRUM_FORM"
+            where
+                   PARENT_NODE_ID like Get_Repeat_Header.PARENT_NODE_ID||'%'
+                   AND TYPE in( 'Repeatable')
+                   AND OIC_ID        = p_ics_run_id
+                   AND BUSINESS_UNIT = p_business_unit
+				   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+				   AND APP_ID      = p_app_id       --Added for Version1.1
+            ;
+
+            -- Parent Level assignment -- If more than 1 child exists
+            IF l_count_nodes > 1
+                and
+                l_parent_node_val is null then
+                l_parent_node_val := Get_Repeat_Header.PARENT_NODE_ID;
+                P_LEVEL           := 0;
+            end if;
+            -- Check for more than 1 child exists
+            select
+                   NVL(max('Yes'),'No')
+            into
+                   l_parent_child
+            from
+                   dual
+            where
+                   Get_Repeat_Header.PARENT_NODE_ID like nvl(l_parent_node_val,'No_Child')||'%'
+            ;
+            -- Sinlge parent 
+            IF l_parent_child = 'No' THEN
+                l_parent_node_val := null;
+            END IF;
+
+            -- increated level number for each child
+            if l_parent_child = 'Yes' then
+                P_LEVEL := P_LEVEL+1;
+            else
+                P_LEVEL := 1;
+            end if;
+
+            -- update level 1 nodes
+            if l_parent_child = 'No' then
+                select
+                       nvl(max(ROW_NUM),0)
+                into
+                       l_row_num
+                from
+                       "XXICS"."XXTWC_FULCRUM_FORM"
+                where
+                       TYPE in( 'Repeatable')
+                       and PARENT_NODE_ID not like Get_Repeat_Header.PARENT_NODE_ID||'%'
+                       and row_num       > Get_Repeat_Header.row_num
+                       AND OIC_ID        = p_ics_run_id
+                       AND BUSINESS_UNIT = p_business_unit
+ 					   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+					   AND APP_ID      = p_app_id       --Added for Version1.1
+                       and rownum        = 1
+                ;
+
+                UPDATE
+                       "XXICS"."XXTWC_FULCRUM_FORM"
+                SET    LEVEL_NUMBER = P_LEVEL
+                WHERE
+                       OIC_ID                = p_ics_run_id
+                       AND BUSINESS_UNIT     = p_business_unit
+ 					   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+					   AND APP_ID      = p_app_id       --Added for Version1.1
+                       AND PARENT_NODE_ID like Get_Repeat_Header.PARENT_NODE_ID||'%'
+                       and row_num >=
+                       CASE
+                              WHEN l_row_num = 0 THEN 0 ELSE Get_Repeat_Header.ROW_NUM
+                       END
+                ;
+
+        -- update nodes greater then level 1 which has child nodes
+            ELSIF l_parent_child = 'Yes' THEN
+                select
+                       nvl(max(ROW_NUM),0)
+                into
+                       l_row_num
+                from
+                       "XXICS"."XXTWC_FULCRUM_FORM"
+                where
+                       TYPE in( 'Repeatable')
+                       and PARENT_NODE_ID like Get_Repeat_Header.PARENT_NODE_ID||'%'
+                       and row_num       > Get_Repeat_Header.row_num
+                       AND OIC_ID        = p_ics_run_id
+                       AND BUSINESS_UNIT = p_business_unit
+					   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+					   AND APP_ID      = p_app_id       --Added for Version1.1
+                       and rownum        = 1
+                ;
+
+                UPDATE
+                       "XXICS"."XXTWC_FULCRUM_FORM"
+                SET    LEVEL_NUMBER = P_LEVEL
+                where
+                       OIC_ID                = p_ics_run_id
+                       AND BUSINESS_UNIT     = p_business_unit
+					   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+					   AND APP_ID      = p_app_id       --Added for Version1.1
+                       AND PARENT_NODE_ID like Get_Repeat_Header.PARENT_NODE_ID||'%'
+                       and row_num <
+                       CASE
+                              WHEN l_row_num = 0 THEN 1000 ELSE l_row_num
+                       END
+                ;
+
+            END IF;
+        END LOOP;
+
+        -- Update level 0 records/nodes
+        UPDATE
+               "XXICS"."XXTWC_FULCRUM_FORM"
+        SET    LEVEL_NUMBER = 0
+        where
+               OIC_ID                 = p_ics_run_id
+               AND LEVEL_NUMBER IS NULL
+               AND BUSINESS_UNIT      = p_business_unit
+ 			   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+        ;
+
+        UPDATE
+               "XXICS"."XXTWC_FULCRUM_FORM"
+        SET    status           = 'SUCCESS'
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'FORM'
+               AND BUSINESS_UNIT = p_business_unit
+			   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+        ;
+
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.5 - Assign Level complete'
+        ||' - l_interface_run_id - '
+        || l_interface_run_id, p_process_id => p_ics_run_id );
+    EXCEPTION
+    WHEN OTHERS THEN
+
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.4E Exception ASSIGN_LEVEL- '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_ics_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := '1.4E Exception ASSIGN_LEVEL- '
+        ||SUBSTR(SQLERRM,1,2000);
+
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'ERROR'
+             , ERROR_MESSAGE = x_error_msg
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'FORM'
+               AND BUSINESS_UNIT = p_business_unit
+			   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+        ;
+    END;
+END ASSIGN_LEVEL;
+
+
+
+
+PROCEDURE LOAD_FORM_DATA
+                        (
+                            p_ics_run_id                IN  VARCHAR2
+                          , p_form_oic_id               IN  VARCHAR2
+                          , p_form_key                  IN  VARCHAR2 
+                          , p_business_unit             IN  VARCHAR2
+                          , p_app_name                  IN  VARCHAR2
+						  , p_app_id                    IN  VARCHAR2         --Added version 1.1
+                          , p_interface_run_id          IN  VARCHAR2
+						  , p_date_updated_since		IN  VARCHAR2
+--                          , x_status 					OUT VARCHAR2
+--                          , x_error_msg 				OUT VARCHAR2
+                        )
+AS
+l_procedure VARCHAR2(250) := 'LOAD_FORM_DATA';
+
+l_count number;
+l_count_upd number;
+l_start number:= 1;
+l_end number;
+l_value varchar2(4000);
+l_new_value varchar2(4000);
+x_status varchar2(4000);
+x_error_msg varchar2(4000);
+
+l_level0_hdr_parent_node varchar2(200);
+l_level0_key number;
+l_level1_key number;
+l_level2_key number;
+l_level3_key number;
+l_level4_key number;
+l_level5_key number;
+BEGIN
+x_status := 'SUCCESS';
+    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.6 - Load Form data start : '
+    ||' - l_interface_run_id - '|| p_interface_run_id, p_process_id => p_interface_run_id );
+
+
+BEGIN
+
+--For I in 1..20
+--loop
+    select
+           nvl(regexp_count(RAW_PAYLOAD,'"choice_values":\["'),0)
+    into
+           l_count
+    from
+           "XXICS"."XXTWC_FULCRUM_RAWDATA"
+    where
+           OIC_ID            = p_ics_run_id
+           AND BUSINESS_UNIT = p_business_unit
+		   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+		   AND APP_ID      = p_app_id       --Added for Version1.1
+           AND TYPE          = 'RECORDS'
+    ;
+
+    if l_count > 0 then
+        for K in 1..l_count
+        loop
+            select
+                   ((instr(RAW_PAYLOAD,'"choice_values":["',(instr(RAW_PAYLOAD,'"choice_values":["'))
+--                   ,K
+                   )))
+            into
+                   l_count_upd
+            from
+                   "XXICS"."XXTWC_FULCRUM_RAWDATA"
+            where
+                   OIC_ID            = p_ics_run_id
+                   AND BUSINESS_UNIT = p_business_unit
+				   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+				   AND APP_ID      = p_app_id       --Added for Version1.1
+                   AND TYPE          = 'RECORDS'
+            ;
+
+            select
+                   ((instr(RAW_PAYLOAD,'"choice_values":["',(instr(RAW_PAYLOAD,'"choice_values":["'))
+--                   ,K
+                   )))
+            into
+                   l_start
+            from
+                   "XXICS"."XXTWC_FULCRUM_RAWDATA"
+            where
+                   OIC_ID            = p_ics_run_id
+                   AND BUSINESS_UNIT = p_business_unit
+				   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+				   AND APP_ID      = p_app_id       --Added for Version1.1
+                   AND TYPE          = 'RECORDS'
+            ;
+
+            select
+                   (((instr(RAW_PAYLOAD,'"]',l_start))+2)-l_start)
+            into
+                   l_end
+            from
+                   "XXICS"."XXTWC_FULCRUM_RAWDATA"
+            where
+                   OIC_ID            = p_ics_run_id
+                   AND BUSINESS_UNIT = p_business_unit
+ 				   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+				   AND APP_ID      = p_app_id       --Added for Version1.1
+                   AND TYPE          = 'RECORDS'
+            ;
+
+            select
+                   substr(RAW_PAYLOAD,l_start,l_end)
+            into
+                   l_value
+            from
+                   "XXICS"."XXTWC_FULCRUM_RAWDATA"
+            where
+                   OIC_ID            = p_ics_run_id
+                   AND BUSINESS_UNIT = p_business_unit
+				   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+				   AND APP_ID      = p_app_id       --Added for Version1.1
+                   AND TYPE          = 'RECORDS'
+            ;
+
+            select
+                   replace(replace(replace(l_value,'["','"'),'"]','"'),'","',',')
+            into
+                   l_new_value
+            from
+                   "XXICS"."XXTWC_FULCRUM_RAWDATA"
+            where
+                   OIC_ID            = p_ics_run_id
+                   AND BUSINESS_UNIT = p_business_unit
+ 				   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+				   AND APP_ID      = p_app_id       --Added for Version1.1
+                   AND TYPE          = 'RECORDS'
+            ;
+
+        --    DBMS_OUTPUT.put_line ('l_start-'||l_start||'-l_end-'||l_end||'-l_value-'||l_value||'-l_new_value-'||l_new_value||'-K-'||K||'-l_count-'||l_count);
+
+            if l_count_upd > 0 then
+                update
+                       "XXICS"."XXTWC_FULCRUM_RAWDATA"
+                set    raw_payload = (replace(RAW_PAYLOAD,l_value,l_new_value))
+                where
+                       OIC_ID            = p_ics_run_id
+                       AND BUSINESS_UNIT = p_business_unit
+					   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+					   AND APP_ID      = p_app_id       --Added for Version1.1
+                       AND TYPE          = 'RECORDS'
+                ;
+                else
+            exit;
+            end if;
+        end loop;
+    end if;
+--end loop;
+    EXCEPTION
+    WHEN OTHERS THEN
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.6E - Execption updating Raw Data - '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_interface_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := '1.6E Execption updating Raw Data - '
+        ||SUBSTR(SQLERRM,1,2000);
+
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'ERROR'
+             , ERROR_MESSAGE = x_error_msg
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'RECORDS'
+               AND BUSINESS_UNIT = p_business_unit
+ 			   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+        ;
+END;
+
+    IF x_status = 'SUCCESS' THEN
+
+    BEGIN
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    FORMATED_PAYLOAD =
+               (
+                      SELECT
+                             xutl_json.json_to_xml(RAW_PAYLOAD)
+                      FROM
+                             XXTWC_FULCRUM_RAWDATA
+                      WHERE
+                             OIC_ID            = p_ics_run_id
+                             AND BUSINESS_UNIT = p_business_unit
+							--AND APP_NAME      = p_app_name     --Commented for Version1.1
+							 AND APP_ID      = p_app_id       --Added for Version1.1
+                             AND TYPE          = 'RECORDS'
+               )
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND BUSINESS_UNIT = p_business_unit
+ 			   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+               AND TYPE          = 'RECORDS'
+        ;
+
+    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.7 - Inserting into XXTWC_FULCRUM_RAWDATA Completed - '
+    ||' - l_interface_run_id - '|| p_interface_run_id, p_process_id => p_interface_run_id );
+
+    EXCEPTION
+    WHEN OTHERS THEN
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.6E - Execption Inserting into XXTWC_FULCRUM_RAWDATA - '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_interface_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := '1.6E - Execption Inserting into XXTWC_FULCRUM_RAWDATA - '
+        ||SUBSTR(SQLERRM,1,2000);
+
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'ERROR'
+             , ERROR_MESSAGE = x_error_msg
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'RECORDS'
+               AND BUSINESS_UNIT = p_business_unit
+			   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+        ;
+
+    END;
+     END IF;
+
+    IF x_status = 'SUCCESS' THEN
+    BEGIN
+    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.8 - Inserting into XXTWC_FULCRUM_RECORD_STG start - '
+    ||' - l_interface_run_id - '|| p_interface_run_id, p_process_id => p_interface_run_id );
+
+    INSERT INTO "XXICS"."XXTWC_FULCRUM_RECORD_STG"
+           ( BUSINESS_UNIT
+                , APP_NAME
+				, APP_ID    -- Added for Version1.1
+                , STATUS
+                , TYPE
+                , OIC_ID
+                , FORM_OIC_ID
+                , NODE_ID
+                , NODE_NAME
+                , NODE_VALUE
+                , PARENT_NODE_ID
+                , NODE_KIND
+           )
+    SELECT
+           p_business_unit
+         , p_app_name
+		 , p_app_id    --Added for Version1.1
+         ,'NEW'
+         ,'RECORDS'
+         , p_ics_run_id
+         , p_form_oic_id
+         , x.node_id
+         , x.node_name
+         , x.node_value
+         , x.parent_node_id
+         , x.node_kind
+    FROM
+           XXTWC_FULCRUM_RAWDATA  raw1
+         , XMLTable(
+      'declare function local:getChildren($e as node(), $pID as xs:string?) as element()*
+       {
+         for $i at $p in $e/(child::*|attribute::*)
+         let $ID := if ($pID) then concat($pID,".",$p) else "1"
+         return element r
+         {
+           element node_id {$ID}
+         , element parent_node_id {$pID}
+         , element node_name {name($i)}
+         , if ($i instance of attribute())
+             then ( element node_value {data($i)}, element node_kind {"attribute"} )
+             else ( element node_value {$i/text()}, element node_kind {"element"} )
+         }
+         | local:getChildren($i,$ID)
+       }; (: :)
+       local:getChildren($d,())'
+       passing raw1.FORMATED_PAYLOAD as "d"
+       columns node_id         varchar2(100)   path 'node_id'
+             , node_name       varchar2(30)    path 'node_name'
+             , node_value      varchar2(2000)  path 'node_value'
+             , parent_node_id  varchar2(100)   path 'parent_node_id'
+             , node_kind       varchar2(30)    path 'node_kind'
+      ) x
+    where
+           1                      =1
+           and raw1.oic_id        = p_ics_run_id
+           and raw1.BUSINESS_UNIT = p_business_unit
+           --and raw1.APP_NAME      = p_app_name   --Commented for Version1.1
+		   and raw1.APP_ID      = p_app_id       --Added for Version1.1		   
+           and raw1.TYPE          = 'RECORDS'
+    ;
+    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.9 - Inserting into XXTWC_FULCRUM_RECORD_STG completed - '
+    ||' - l_interface_run_id - '|| p_interface_run_id, p_process_id => p_interface_run_id );
+
+    EXCEPTION
+    WHEN OTHERS THEN
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.8E - Execption Inserting into XXTWC_FULCRUM_RECORD_STG - '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_interface_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := '1.8E - Execption Inserting into XXTWC_FULCRUM_RECORD_STG - '
+        ||SUBSTR(SQLERRM,1,2000);
+
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'ERROR'
+             , ERROR_MESSAGE = x_error_msg
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'RECORDS'
+               AND BUSINESS_UNIT = p_business_unit
+			   --AND APP_NAME      = p_app_name     --Commented for Version1.1
+			   AND APP_ID      = p_app_id       --Added for Version1.1
+        ;
+
+    END;
+
+    END IF ;
+
+IF x_status = 'SUCCESS' THEN
+    BEGIN
+    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.10 - Inserting into Level tables start - '
+    ||' - l_interface_run_id - '|| p_interface_run_id, p_process_id => p_interface_run_id );
+
+for level0_header in (
+      select distinct 
+	   RecStg.parent_node_id parent_node_id
+     , RecStg.BUSINESS_UNIT BUSINESS_UNIT
+     , RecStg.APP_NAME      APP_NAME
+	 , RecStg.APP_ID      APP_ID         --Added for Version1.1
+     , RecStg.NODE_VALUE    COLUMN_KEY
+     , stg.DATA_NAME    COLUMN_NAME
+     ,(select node_value from XXTWC_FULCRUM_RECORD_STG RecStg_s where RecStg_s.NODE_ID like RecStg.PARENT_NODE_ID and
+     --RecStg_s.oic_id = RecStg.oic_id  AND RecStg_s.BUSINESS_UNIT = RecStg.BUSINESS_UNIT and RecStg_s.APP_NAME = stg.APP_NAME) COLUMN_VALUE  --Commented for 1.1
+	 RecStg_s.oic_id = RecStg.oic_id  AND RecStg_s.BUSINESS_UNIT = RecStg.BUSINESS_UNIT and RecStg_s.APP_ID = stg.APP_ID) COLUMN_VALUE   --Added for 1.1
+     , RecStg.NODE_NAME     NODE_NAME
+     , stg.TYPE    TYPE
+     , stg.ROW_NUM ROW_NUM
+	  --RecStg.*,(select node_value from XXTWC_FULCRUM_RECORD_STG RecStg_s where RecStg_s.NODE_ID like RecStg.PARENT_NODE_ID) value 
+      from XXTWC_FULCRUM_RECORD_STG RecStg ,"XXICS"."XXTWC_FULCRUM_FORM" stg 
+      where 1=1
+      and RecStg.node_name = 'key'       
+      and RecStg.NODE_VALUE = stg.key
+      and stg.key = p_form_key
+      --and RecStg.oic_id = p_ics_run_id  AND RecStg.BUSINESS_UNIT = p_business_unit and RecStg.APP_NAME = p_app_name and RecStg.STATUS = 'NEW'  --Commented for Version1.1
+	  and RecStg.oic_id = p_ics_run_id  AND RecStg.BUSINESS_UNIT = p_business_unit and RecStg.APP_ID = p_app_id and RecStg.STATUS = 'NEW'    --Added for Version1.1
+      --and stg.oic_id = p_form_oic_id  AND stg.BUSINESS_UNIT = p_business_unit and stg.APP_NAME = p_app_name   --Commented for Version1.1
+	  and stg.oic_id = p_form_oic_id  AND stg.BUSINESS_UNIT = p_business_unit and stg.APP_ID = p_app_id     --Added for Version1.1
+      --and stg.BUSINESS_UNIT = RecStg.BUSINESS_UNIT and stg.APP_NAME = RecStg.APP_NAME   --Commented for Version1.1
+	  and stg.BUSINESS_UNIT = RecStg.BUSINESS_UNIT and stg.APP_ID = RecStg.APP_ID  --Added for Version1.1
+      order by RecStg.PARENT_NODE_ID
+) loop
+
+--DBMS_OUTPUT.put_line ('level0_header-'||level0_header.node_id||'-'||level0_header.node_name||'-'||level0_header.node_value||'-'||level0_header.parent_node_id||'-'||level0_header.node_kind);
+--DBMS_OUTPUT.put_line (0||'-'||'level0_header-'||level0_header.BUSINESS_UNIT||'-'||level0_header.APP_NAME||'-'||level0_header.NODE_NAME||'-'||level0_header.COLUMN_KEY||'-'||level0_header.COLUMN_NAME||'-'||level0_header.COLUMN_VALUE||'-'||level0_header.TYPE||'-'||level0_header.ROW_NUM);
+
+l_level0_hdr_parent_node := substr(level0_header.PARENT_NODE_ID,1,instr(level0_header.PARENT_NODE_ID,'.',1,regexp_count(replace(level0_header.PARENT_NODE_ID,'.','_'),'_'))-1)||'%';
+l_level0_key := "XXICS"."XXTWC_FULCRUM_RECORD_LEVEL0_SEQ"."NEXTVAL";
+
+INSERT INTO XXTWC_FULCRUM_RECORD_LEVEL0
+(
+                         BUSINESS_UNIT
+                        , APP_NAME    
+						, APP_ID     --Added for Version1.1
+                        , DATA_KEY0   
+						, COLUMN_KEY
+                        , COLUMN_NAME 
+                        , COLUMN_VALUE
+                        , OIC_ID
+                        , FORM_OIC_ID
+)
+select
+      RecStg_f.BUSINESS_UNIT BUSINESS_UNIT_f
+     , RecStg_f.APP_NAME      APP_NAME_f
+	 , RecStg_f.APP_ID                    --Added for Version1.1
+	 , l_level0_key
+     , RecStg_f.NODE_VALUE    
+	 , stg_f.DATA_NAME      
+    , (select 
+	case when stg_f.TYPE in ('PhotoField','VideoField','AttachmentField','SignatureField','AudioField') 
+	then XXTWC_FULCRUM_PAAS_SYNC_PKG.GET_MEDIA_URL(P_MEDIA_ID 	=> val,
+				         P_FIELD_TYPE 				=> stg_f.TYPE,
+						 P_INTERFACE_RUN_ID  		=> P_INTERFACE_RUN_ID,
+						 P_FORM_OIC_ID              => P_FORM_OIC_ID,
+						 P_ICS_RUN_ID				=> P_ICS_RUN_ID)
+	else val
+	end as URL
+	from (select listagg(node_value,' ')within group (order by RecStg_s_f.NODE_ID) val from XXTWC_FULCRUM_RECORD_STG RecStg_s_f where 
+     (RecStg_s_f.NODE_ID like 
+     case when stg_f.TYPE in ('ChoiceField','ClassificationField','AddressField') then RecStg_f.PARENT_NODE_ID||'%'
+	 when stg_f.TYPE in ('PhotoField','VideoField','AttachmentField','AddressField','AudioField') then RecStg_f.PARENT_NODE_ID || '.2.2'
+     when stg_f.TYPE in ('SignatureField') then RecStg_f.PARENT_NODE_ID || '.2'
+     ELSE RecStg_f.PARENT_NODE_ID end
+     and RecStg_s_f.node_name = 
+     case when stg_f.TYPE in ('ChoiceField','ClassificationField','PhotoField','VideoField','AttachmentField','AddressField','AudioField','SignatureField') then 'string'
+     ELSE RecStg_s_f.node_name end
+      ) and
+     --RecStg_s_f.oic_id = RecStg_f.oic_id  AND RecStg_s_f.BUSINESS_UNIT = RecStg_f.BUSINESS_UNIT and RecStg_s_f.APP_NAME = RecStg_f.APP_NAME) COLUMN_VALUE  --Commented for 1.1
+	 RecStg_s_f.oic_id = RecStg_f.oic_id  AND RecStg_s_f.BUSINESS_UNIT = RecStg_f.BUSINESS_UNIT 
+	 and RecStg_s_f.APP_ID = RecStg_f.APP_ID)) COLUMN_VALUE  --Added for 1.1
+	 , p_ics_run_id
+     , RecStg_f.FORM_OIC_ID
+from
+       XXTWC_FULCRUM_RECORD_STG RecStg_f  ,"XXICS"."XXTWC_FULCRUM_FORM" stg_f 
+      where 1=1
+      and RecStg_f.node_name = 'key' 
+      and (RecStg_f.NODE_VALUE = stg_f.key or RecStg_f.NODE_VALUE like '%'||stg_f.key||'%')
+      and stg_f.level_number = 0
+      and RecStg_f.parent_node_id like l_level0_hdr_parent_node
+      --and RecStg_f.oic_id = p_ics_run_id  AND RecStg_f.BUSINESS_UNIT = p_business_unit and RecStg_f.APP_NAME = p_app_name and RecStg_f.STATUS = 'NEW'  --Commented for 1.1
+	  and RecStg_f.oic_id = p_ics_run_id  AND RecStg_f.BUSINESS_UNIT = p_business_unit and RecStg_f.APP_ID = p_app_id and RecStg_f.STATUS = 'NEW'   --Added for 1.1
+      and stg_f.oic_id = p_form_oic_id  AND stg_f.BUSINESS_UNIT = p_business_unit 
+	  --and stg_f.APP_NAME = p_app_name        --Commented for Version1.1
+	  and stg_f.APP_ID = p_app_id        -- Added for Version1.1
+      and stg_f.BUSINESS_UNIT = RecStg_f.BUSINESS_UNIT 
+	  --and stg_f.APP_NAME = RecStg_f.APP_NAME      --Commented for Version1.1
+	  and stg_f.APP_ID = RecStg_f.APP_ID     --Added for Version1.1
+      order by stg_f.row_num,RecStg_f.PARENT_NODE_ID;
+
+for I in 1..5 loop 
+IF I = 1 THEN
+l_level1_key := "XXICS"."XXTWC_FULCRUM_RECORD_LEVEL1_SEQ"."NEXTVAL";
+ELSIF I = 2 THEN
+l_level2_key := "XXICS"."XXTWC_FULCRUM_RECORD_LEVEL2_SEQ"."NEXTVAL";
+ELSIF I = 3 THEN
+l_level3_key := "XXICS"."XXTWC_FULCRUM_RECORD_LEVEL3_SEQ"."NEXTVAL";
+ELSIF I = 4 THEN
+l_level4_key := "XXICS"."XXTWC_FULCRUM_RECORD_LEVEL4_SEQ"."NEXTVAL";
+ELSIF I = 5 THEN
+l_level5_key := "XXICS"."XXTWC_FULCRUM_RECORD_LEVEL5_SEQ"."NEXTVAL";
+END IF;
+
+for level_I_header in(
+      select 
+		  RecStg_I_h.parent_node_id parent_node_id_I_h
+		, RecStg_I_h.BUSINESS_UNIT BUSINESS_UNIT_I_h
+		, RecStg_I_h.APP_NAME APP_NAME_I_h
+		, RecStg_I_h.APP_ID APP_ID_I_h       --Added for Version1.1
+		, RecStg_I_h.NODE_NAME  NODE_NAME_I_h
+		, RecStg_I_h.NODE_VALUE NODE_VALUE_I_h
+		,(select node_value from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_h where RecStg_s_I_h.NODE_ID like RecStg_I_h.PARENT_NODE_ID and
+     --RecStg_s_I_h.oic_id = RecStg_I_h.oic_id  AND RecStg_s_I_h.BUSINESS_UNIT = RecStg_I_h.BUSINESS_UNIT and RecStg_s_I_h.APP_NAME = RecStg_I_h.APP_NAME) value_I_h  --Commented for 1.1
+	 RecStg_s_I_h.oic_id = RecStg_I_h.oic_id  AND RecStg_s_I_h.BUSINESS_UNIT = RecStg_I_h.BUSINESS_UNIT and RecStg_s_I_h.APP_ID = RecStg_I_h.APP_ID) value_I_h    --Added for 1.1
+		,stg_I_h.TYPE TYPE_I_h
+		,stg_I_h.ROW_NUM ROW_NUM_I_h
+      from XXTWC_FULCRUM_RECORD_STG RecStg_I_h  ,"XXICS"."XXTWC_FULCRUM_FORM" stg_I_h 
+      where 1=1
+      and RecStg_I_h.node_name = 'key' 
+      and (RecStg_I_h.NODE_VALUE = stg_I_h.key or RecStg_I_h.NODE_VALUE like '%'||stg_I_h.key||'%')
+      and stg_I_h.level_number = I
+      and stg_I_h.type = 'Repeatable'
+      and RecStg_I_h.PARENT_NODE_ID like l_level0_hdr_parent_node
+      --Start of Commenting for 1.1
+	  --and RecStg_I_h.oic_id = p_ics_run_id  AND RecStg_I_h.BUSINESS_UNIT = p_business_unit and RecStg_I_h.APP_NAME = p_app_name and RecStg_I_h.STATUS = 'NEW'
+      --and stg_I_h.oic_id = p_form_oic_id  AND stg_I_h.BUSINESS_UNIT = p_business_unit and stg_I_h.APP_NAME = p_app_name
+      --and stg_I_h.BUSINESS_UNIT = RecStg_I_h.BUSINESS_UNIT and stg_I_h.APP_NAME = RecStg_I_h.APP_NAME
+	  --End of Commenting for 1.1
+	  --Start of Addition for 1.1
+      and RecStg_I_h.oic_id = p_ics_run_id  AND RecStg_I_h.BUSINESS_UNIT = p_business_unit and RecStg_I_h.APP_ID = p_app_id and RecStg_I_h.STATUS = 'NEW'
+      and stg_I_h.oic_id = p_form_oic_id  AND stg_I_h.BUSINESS_UNIT = p_business_unit and stg_I_h.APP_ID = p_app_id
+      and stg_I_h.BUSINESS_UNIT = RecStg_I_h.BUSINESS_UNIT and stg_I_h.APP_ID = RecStg_I_h.APP_ID	 
+      --End of Addition for 1.1	  
+--      and stg_I_h.oic_id = p_ics_run_id AND stg_I_h.BUSINESS_UNIT = p_business_unit and stg_I_h.APP_NAME = p_app_name and stg_I_h.STATUS = 'NEW'
+--      and stg_I_h.oic_id = RecStg_I_h.oic_id  AND stg_I_h.BUSINESS_UNIT = RecStg_I_h.BUSINESS_UNIT and stg_I_h.APP_NAME = RecStg_I_h.APP_NAME and stg_I_h.STATUS = 'NEW'
+      order by stg_I_h.row_num,RecStg_I_h.PARENT_NODE_ID)
+      loop
+
+--DBMS_OUTPUT.put_line (I||'-'||'level_I_header-'||level_I_header.node_id_I_h||'-'||level_I_header.TYPE||'-'||level_I_header.ROW_NUM);
+--DBMS_OUTPUT.put_line (I||'-'||'level_I_header-'||level_I_header.BUSINESS_UNIT_I_h||'-'||level_I_header.APP_NAME_I_h||'-'||level_I_header.NODE_NAME_I_h||'-'||level_I_header.NODE_VALUE_I_h||'-'||level_I_header.value_I_h||'-'||level_I_header.TYPE_I_h||'-'||level_I_header.ROW_NUM_I_h);
+
+for level_I_header_u in(
+      select distinct 
+		substr(RecStg_I_hu.parent_node_id,1,instr(RecStg_I_hu.parent_node_id,'.',1,regexp_count(replace(RecStg_I_hu.parent_node_id,'.','_'),'_'))-1) parent_node_id_a
+      from XXTWC_FULCRUM_RECORD_STG RecStg_I_hu  ,"XXICS"."XXTWC_FULCRUM_FORM" stg_I_hu 
+      where 1=1
+      and RecStg_I_hu.node_name = 'key' 
+      and (RecStg_I_hu.NODE_VALUE = stg_I_hu.key or RecStg_I_hu.NODE_VALUE like '%'||stg_I_hu.key||'%')
+      and stg_I_hu.level_number = I
+      and stg_I_hu.type not in ('Repeatable')
+      and RecStg_I_hu.PARENT_NODE_ID like level_I_header.parent_node_id_I_h||'%'
+      --Start of Commenting for 1.1
+	  --and Recstg_I_hu.oic_id = p_ics_run_id  AND Recstg_I_hu.BUSINESS_UNIT = p_business_unit and Recstg_I_hu.APP_NAME = p_app_name and Recstg_I_hu.STATUS = 'NEW'
+      --and stg_I_hu.oic_id = p_form_oic_id  AND stg_I_hu.BUSINESS_UNIT = p_business_unit and stg_I_hu.APP_NAME = p_app_name
+      --and stg_I_hu.BUSINESS_UNIT = Recstg_I_hu.BUSINESS_UNIT and stg_I_hu.APP_NAME = Recstg_I_hu.APP_NAME
+      --End of Commenting for 1.1
+	  --Start of Addition for 1.1
+	  and Recstg_I_hu.oic_id = p_ics_run_id  AND Recstg_I_hu.BUSINESS_UNIT = p_business_unit and Recstg_I_hu.APP_ID = p_app_id and Recstg_I_hu.STATUS = 'NEW'
+      and stg_I_hu.oic_id = p_form_oic_id  AND stg_I_hu.BUSINESS_UNIT = p_business_unit and stg_I_hu.APP_ID = p_app_id
+      and stg_I_hu.BUSINESS_UNIT = Recstg_I_hu.BUSINESS_UNIT and stg_I_hu.APP_ID = Recstg_I_hu.APP_ID	
+      --End of Addition for 1.1	  
+--      and stg_I_hu.oic_id = p_ics_run_id AND stg_I_hu.BUSINESS_UNIT = p_business_unit and stg_I_hu.APP_NAME = p_app_name and stg_I_hu.STATUS = 'NEW'
+--      and stg_I_hu.oic_id = Recstg_I_hu.oic_id  AND stg_I_hu.BUSINESS_UNIT = Recstg_I_hu.BUSINESS_UNIT and stg_I_hu.APP_NAME = Recstg_I_hu.APP_NAME and stg_I_hu.STATUS = 'NEW'
+      order by parent_node_id_a
+      )
+      loop
+
+--DBMS_OUTPUT.put_line (I||'-'||'level_I_header_u-'||level_I_header_u.parent_node_id_a);
+
+IF I = 1 THEN
+
+INSERT INTO XXTWC_FULCRUM_RECORD_LEVEL1
+(
+                         BUSINESS_UNIT
+                        , APP_NAME 
+                        , APP_ID    --Added for 1.1						
+                        , DATA_KEY0   
+						, DATA_KEY1
+						, COLUMN_KEY
+                        , COLUMN_NAME 
+                        , COLUMN_VALUE
+                        , OIC_ID    
+                        , FORM_OIC_ID
+)
+      select
+       RecStg_I_f.BUSINESS_UNIT  BUSINESS_UNIT_I_f
+     , RecStg_I_f.APP_NAME       APP_NAME_I_f
+	 , RecStg_I_f.APP_ID       APP_ID_I_f       --Added for 1.1
+	 , l_level0_key
+	 , l_level1_key
+     , RecStg_I_f.NODE_VALUE     NODE_VALUE_I_f
+	 , stg_I_f.DATA_NAME    DATA_NAME_I_f
+--     ,(select node_value from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_f where RecStg_s_I_f.NODE_ID like RecStg_I_f.PARENT_NODE_ID and
+--     RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and RecStg_s_I_f.APP_NAME = RecStg_I_f.APP_NAME) value_I_f
+	 ,(select 
+	case when stg_i_f.TYPE in ('PhotoField','VideoField','AttachmentField','SignatureField','AudioField') 
+	then XXTWC_FULCRUM_PAAS_SYNC_PKG.GET_MEDIA_URL(P_MEDIA_ID 	=> val,
+				         P_FIELD_TYPE 				=> stg_i_f.TYPE,
+						 P_INTERFACE_RUN_ID  		=> P_INTERFACE_RUN_ID,
+						 P_FORM_OIC_ID              => P_FORM_OIC_ID,
+						 P_ICS_RUN_ID				=> P_ICS_RUN_ID)
+	else val
+	end as URL
+	from(select listagg(node_value,' ')within group (order by RecStg_s_I_f.NODE_ID)val from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_f where 
+     (RecStg_s_I_f.NODE_ID like 
+     case when stg_i_f.TYPE in ('ChoiceField','ClassificationField','AddressField') then RecStg_I_f.PARENT_NODE_ID||'%'
+	 when stg_i_f.TYPE in ('PhotoField','VideoField','AttachmentField','AddressField','AudioField') then RecStg_I_f.PARENT_NODE_ID || '.2.2'
+     when stg_i_f.TYPE in ('SignatureField') then RecStg_I_f.PARENT_NODE_ID || '.2'
+     ELSE RecStg_I_f.PARENT_NODE_ID end
+     and RecStg_s_I_f.node_name = 
+     case when stg_i_f.TYPE in ('ChoiceField','ClassificationField','PhotoField','VideoField','AttachmentField','AddressField','AudioField','SignatureField') then 'string'
+     ELSE RecStg_s_I_f.node_name end
+      ) and
+     --RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and RecStg_s_I_f.APP_NAME = RecStg_I_f.APP_NAME) value_I_f    --Commented for Version1.1
+	 RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT 
+	 and RecStg_s_I_f.APP_ID = RecStg_I_f.APP_ID)) value_I_f      --Added for Version1.1
+     , p_ics_run_id
+     , RecStg_I_f.FORM_OIC_ID
+from
+       XXTWC_FULCRUM_RECORD_STG RecStg_I_f  ,"XXICS"."XXTWC_FULCRUM_FORM" stg_i_f 
+      where 1=1
+      and RecStg_I_f.node_name = 'key' 
+      and (RecStg_I_f.NODE_VALUE = stg_i_f.key or RecStg_I_f.NODE_VALUE like '%'||stg_i_f.key||'%')
+      and stg_i_f.level_number = I
+      and stg_i_f.type not in('Repeatable')
+      and RecStg_I_f.PARENT_NODE_ID like level_I_header_u.parent_node_id_a||'%'
+      --Commented for 1.1
+	  --and RecStg_I_f.oic_id = p_ics_run_id  AND RecStg_I_f.BUSINESS_UNIT = p_business_unit and RecStg_I_f.APP_NAME = p_app_name and RecStg_I_f.STATUS = 'NEW'
+      --and stg_i_f.oic_id = p_form_oic_id  AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_NAME = p_app_name
+      --and stg_i_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and stg_i_f.APP_NAME = RecStg_I_f.APP_NAME
+      --End of Comment for 1.1
+	  --Added for 1.1
+	  and RecStg_I_f.oic_id = p_ics_run_id  AND RecStg_I_f.BUSINESS_UNIT = p_business_unit and RecStg_I_f.APP_ID = p_app_id and RecStg_I_f.STATUS = 'NEW'
+      and stg_i_f.oic_id = p_form_oic_id  AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_ID = p_app_id
+      and stg_i_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and stg_i_f.APP_ID = RecStg_I_f.APP_ID	
+      --End of Addition for 1.1	  
+--      and stg_i_f.oic_id = p_ics_run_id AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_NAME = p_app_name and stg_i_f.STATUS = 'NEW'
+--      and stg_i_f.oic_id = Recstg_i_f.oic_id  AND stg_i_f.BUSINESS_UNIT = Recstg_i_f.BUSINESS_UNIT and stg_i_f.APP_NAME = Recstg_i_f.APP_NAME and stg_i_f.STATUS = 'NEW'
+      order by stg_i_f.row_num,RecStg_I_f.PARENT_NODE_ID;
+
+ELSIF I = 2 THEN
+
+INSERT INTO XXTWC_FULCRUM_RECORD_LEVEL2
+(
+                         BUSINESS_UNIT
+                        , APP_NAME    
+						, APP_ID     --Added for 1.1
+                        , DATA_KEY0   
+						, DATA_KEY1
+						, DATA_KEY2
+						, COLUMN_KEY
+                        , COLUMN_NAME 
+                        , COLUMN_VALUE
+                        , OIC_ID      
+                        , FORM_OIC_ID
+)
+      select
+       RecStg_I_f.BUSINESS_UNIT  BUSINESS_UNIT_I_f
+     , RecStg_I_f.APP_NAME       APP_NAME_I_f
+	 , RecStg_I_f.APP_ID       APP_ID_I_f      --Added for 1.1
+	 , l_level0_key
+	 , l_level1_key
+	 , l_level2_key
+     , RecStg_I_f.NODE_VALUE     NODE_VALUE_I_f
+	 , stg_I_f.DATA_NAME    DATA_NAME_I_f
+--     ,(select node_value from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_f where RecStg_s_I_f.NODE_ID like RecStg_I_f.PARENT_NODE_ID and
+--     RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and RecStg_s_I_f.APP_NAME = RecStg_I_f.APP_NAME) value_I_f
+	,(select 
+	case when stg_i_f.TYPE in ('PhotoField','VideoField','AttachmentField','SignatureField','AudioField') 
+	then XXTWC_FULCRUM_PAAS_SYNC_PKG.GET_MEDIA_URL(P_MEDIA_ID 	=> val,
+				         P_FIELD_TYPE 				=> stg_i_f.TYPE,
+						 P_INTERFACE_RUN_ID  		=> P_INTERFACE_RUN_ID,
+						 P_FORM_OIC_ID              => P_FORM_OIC_ID,
+						 P_ICS_RUN_ID				=> P_ICS_RUN_ID)
+	else val
+	end as URL
+	from(select listagg(node_value,' ')within group (order by RecStg_s_I_f.NODE_ID)val from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_f where 
+     (RecStg_s_I_f.NODE_ID like 
+     case when stg_i_f.TYPE in ('ChoiceField','ClassificationField','AddressField') then RecStg_I_f.PARENT_NODE_ID||'%'
+	 when stg_i_f.TYPE in ('PhotoField','VideoField','AttachmentField','AddressField','AudioField') then RecStg_I_f.PARENT_NODE_ID || '.2.2'
+     when stg_i_f.TYPE in ('SignatureField') then RecStg_I_f.PARENT_NODE_ID || '.2'
+     ELSE RecStg_I_f.PARENT_NODE_ID end
+     and RecStg_s_I_f.node_name = 
+     case when stg_i_f.TYPE in ('ChoiceField','ClassificationField','PhotoField','VideoField','AttachmentField','AddressField','AudioField','SignatureField') then 'string'
+     ELSE RecStg_s_I_f.node_name end
+      ) and
+     --RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and RecStg_s_I_f.APP_NAME = RecStg_I_f.APP_NAME) value_I_f  --Commented for 1.1
+     RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT 
+	 and RecStg_s_I_f.APP_ID = RecStg_I_f.APP_ID)) value_I_f   --Added for 1.1
+	 ,p_ics_run_id
+     , RecStg_I_f.FORM_OIC_ID
+from
+       XXTWC_FULCRUM_RECORD_STG RecStg_I_f  ,"XXICS"."XXTWC_FULCRUM_FORM" stg_i_f 
+      where 1=1
+      and RecStg_I_f.node_name = 'key' 
+      and (RecStg_I_f.NODE_VALUE = stg_i_f.key or RecStg_I_f.NODE_VALUE like '%'||stg_i_f.key||'%')
+      and stg_i_f.level_number = I
+      and stg_i_f.type not in('Repeatable')
+      and RecStg_I_f.PARENT_NODE_ID like level_I_header_u.parent_node_id_a||'%'
+      --Commented for 1.1
+	  --and RecStg_I_f.oic_id = p_ics_run_id  AND RecStg_I_f.BUSINESS_UNIT = p_business_unit and RecStg_I_f.APP_NAME = p_app_name and RecStg_I_f.STATUS = 'NEW'
+      --and stg_i_f.oic_id = p_form_oic_id  AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_NAME = p_app_name
+      --and stg_i_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and stg_i_f.APP_NAME = RecStg_I_f.APP_NAME
+      --Added for 1.1
+	  and RecStg_I_f.oic_id = p_ics_run_id  AND RecStg_I_f.BUSINESS_UNIT = p_business_unit and RecStg_I_f.APP_ID = p_app_id and RecStg_I_f.STATUS = 'NEW'
+      and stg_i_f.oic_id = p_form_oic_id  AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_ID = p_app_id
+      and stg_i_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and stg_i_f.APP_ID = RecStg_I_f.APP_ID  
+	  --End of Addition for 1.1
+--      and stg_i_f.oic_id = p_ics_run_id AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_NAME = p_app_name and stg_i_f.STATUS = 'NEW'
+--      and stg_i_f.oic_id = Recstg_i_f.oic_id  AND stg_i_f.BUSINESS_UNIT = Recstg_i_f.BUSINESS_UNIT and stg_i_f.APP_NAME = Recstg_i_f.APP_NAME and stg_i_f.STATUS = 'NEW'
+      order by stg_i_f.row_num,RecStg_I_f.PARENT_NODE_ID;
+
+ELSIF I = 3 THEN
+
+INSERT INTO XXTWC_FULCRUM_RECORD_LEVEL3
+(
+                         BUSINESS_UNIT
+                        , APP_NAME
+						, APP_ID          --Added for 1.1
+                        , DATA_KEY0   
+						, DATA_KEY1
+						, DATA_KEY2
+						, DATA_KEY3
+						, COLUMN_KEY
+                        , COLUMN_NAME 
+                        , COLUMN_VALUE
+                        , OIC_ID      
+                        , FORM_OIC_ID
+)
+      select
+       RecStg_I_f.BUSINESS_UNIT  BUSINESS_UNIT_I_f
+     , RecStg_I_f.APP_NAME       APP_NAME_I_f
+	 , RecStg_I_f.APP_ID       APP_ID_I_f     --Added for 1.1
+	 , l_level0_key
+	 , l_level1_key
+	 , l_level2_key
+	 , l_level3_key
+     , RecStg_I_f.NODE_VALUE     NODE_VALUE_I_f
+	 , stg_I_f.DATA_NAME    DATA_NAME_I_f
+--     ,(select node_value from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_f where RecStg_s_I_f.NODE_ID like RecStg_I_f.PARENT_NODE_ID and
+--     RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and RecStg_s_I_f.APP_NAME = RecStg_I_f.APP_NAME) value_I_f
+     ,(select 
+	case when stg_i_f.TYPE in ('PhotoField','VideoField','AttachmentField','SignatureField','AudioField') 
+	then XXTWC_FULCRUM_PAAS_SYNC_PKG.GET_MEDIA_URL(P_MEDIA_ID 	=> val,
+				         P_FIELD_TYPE 				=> stg_i_f.TYPE,
+						 P_INTERFACE_RUN_ID  		=> P_INTERFACE_RUN_ID,
+						 P_FORM_OIC_ID              => P_FORM_OIC_ID,
+						 P_ICS_RUN_ID				=> P_ICS_RUN_ID)
+	else val
+	end as URL
+	from(select listagg(node_value,' ')within group (order by RecStg_s_I_f.NODE_ID)val from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_f where 
+     (RecStg_s_I_f.NODE_ID like 
+     case when stg_i_f.TYPE in ('ChoiceField','ClassificationField','AddressField') then RecStg_I_f.PARENT_NODE_ID||'%'
+	 when stg_i_f.TYPE in ('PhotoField','VideoField','AttachmentField','AddressField','AudioField') then RecStg_I_f.PARENT_NODE_ID || '.2.2'
+     when stg_i_f.TYPE in ('SignatureField') then RecStg_I_f.PARENT_NODE_ID || '.2'
+     ELSE RecStg_I_f.PARENT_NODE_ID end
+     and RecStg_s_I_f.node_name = 
+     case when stg_i_f.TYPE in ('ChoiceField','ClassificationField','PhotoField','VideoField','AttachmentField','AddressField','AudioField','SignatureField') then 'string'
+     ELSE RecStg_s_I_f.node_name end
+      ) and
+     --RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and RecStg_s_I_f.APP_NAME = RecStg_I_f.APP_NAME) value_I_f  --Commented for 1.1
+	 RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT 
+	 and RecStg_s_I_f.APP_ID = RecStg_I_f.APP_ID)) value_I_f  --Added for 1.1
+	 , p_ics_run_id
+     , RecStg_I_f.FORM_OIC_ID
+from
+       XXTWC_FULCRUM_RECORD_STG RecStg_I_f  ,"XXICS"."XXTWC_FULCRUM_FORM" stg_i_f 
+      where 1=1
+      and RecStg_I_f.node_name = 'key' 
+      and (RecStg_I_f.NODE_VALUE = stg_i_f.key or RecStg_I_f.NODE_VALUE like '%'||stg_i_f.key||'%')
+      and stg_i_f.level_number = I
+      and stg_i_f.type not in('Repeatable')
+      and RecStg_I_f.PARENT_NODE_ID like level_I_header_u.parent_node_id_a||'%'
+      --Commented for 1.1
+	  --and RecStg_I_f.oic_id = p_ics_run_id  AND RecStg_I_f.BUSINESS_UNIT = p_business_unit and RecStg_I_f.APP_NAME = p_app_name and RecStg_I_f.STATUS = 'NEW'
+      --and stg_i_f.oic_id = p_form_oic_id  AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_NAME = p_app_name
+      --and stg_i_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and stg_i_f.APP_NAME = RecStg_I_f.APP_NAME
+      --Added for 1.1
+	  and RecStg_I_f.oic_id = p_ics_run_id  AND RecStg_I_f.BUSINESS_UNIT = p_business_unit and RecStg_I_f.APP_ID = p_app_id and RecStg_I_f.STATUS = 'NEW'
+      and stg_i_f.oic_id = p_form_oic_id  AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_ID = p_app_id
+      and stg_i_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and stg_i_f.APP_ID = RecStg_I_f.APP_ID
+      --End of Addition for 1.1	  
+--      and stg_i_f.oic_id = p_ics_run_id AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_NAME = p_app_name and stg_i_f.STATUS = 'NEW'
+--      and stg_i_f.oic_id = Recstg_i_f.oic_id  AND stg_i_f.BUSINESS_UNIT = Recstg_i_f.BUSINESS_UNIT and stg_i_f.APP_NAME = Recstg_i_f.APP_NAME and stg_i_f.STATUS = 'NEW'
+      order by stg_i_f.row_num,RecStg_I_f.PARENT_NODE_ID;
+
+ELSIF I = 4 THEN
+
+INSERT INTO XXTWC_FULCRUM_RECORD_LEVEL4
+(
+                         BUSINESS_UNIT
+                        , APP_NAME
+                        , APP_ID			  --Added for 1.1			
+                        , DATA_KEY0   
+						, DATA_KEY1
+						, DATA_KEY2
+						, DATA_KEY3
+						, DATA_KEY4
+						, COLUMN_KEY
+                        , COLUMN_NAME 
+                        , COLUMN_VALUE
+                        , OIC_ID      
+                        , FORM_OIC_ID
+)
+      select
+       RecStg_I_f.BUSINESS_UNIT  BUSINESS_UNIT_I_f
+     , RecStg_I_f.APP_NAME       APP_NAME_I_f
+	 , RecStg_I_f.APP_ID       APP_ID_I_f      --Added for 1.1
+	 , l_level0_key
+	 , l_level1_key
+	 , l_level2_key
+	 , l_level3_key
+	 , l_level4_key
+     , RecStg_I_f.NODE_VALUE     NODE_VALUE_I_f
+	 , stg_I_f.DATA_NAME    DATA_NAME_I_f
+--     ,(select node_value from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_f where RecStg_s_I_f.NODE_ID like RecStg_I_f.PARENT_NODE_ID and
+--     RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and RecStg_s_I_f.APP_NAME = RecStg_I_f.APP_NAME) value_I_f
+     ,(select 
+	case when stg_i_f.TYPE in ('PhotoField','VideoField','AttachmentField','SignatureField','AudioField') 
+	then XXTWC_FULCRUM_PAAS_SYNC_PKG.GET_MEDIA_URL(P_MEDIA_ID 	=> val,
+				         P_FIELD_TYPE 				=> stg_i_f.TYPE,
+						 P_INTERFACE_RUN_ID  		=> P_INTERFACE_RUN_ID,
+						 P_FORM_OIC_ID              => P_FORM_OIC_ID,
+						 P_ICS_RUN_ID				=> P_ICS_RUN_ID)
+	else val
+	end as URL
+	from(select listagg(node_value,' ')within group (order by RecStg_s_I_f.NODE_ID)val from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_f where 
+     (RecStg_s_I_f.NODE_ID like 
+     case when stg_i_f.TYPE in ('ChoiceField','ClassificationField','AddressField') then RecStg_I_f.PARENT_NODE_ID||'%'
+	 when stg_i_f.TYPE in ('PhotoField','VideoField','AttachmentField','AddressField','AudioField') then RecStg_I_f.PARENT_NODE_ID || '.2.2'
+     when stg_i_f.TYPE in ('SignatureField') then RecStg_I_f.PARENT_NODE_ID || '.2'
+     ELSE RecStg_I_f.PARENT_NODE_ID end
+     and RecStg_s_I_f.node_name = 
+     case when stg_i_f.TYPE in ('ChoiceField','ClassificationField','PhotoField','VideoField','AttachmentField','AddressField','AudioField','SignatureField') then 'string'
+     ELSE RecStg_s_I_f.node_name end
+      ) and
+     --RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and RecStg_s_I_f.APP_NAME = RecStg_I_f.APP_NAME) value_I_f  --Commented for 1.1
+    RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT 
+	and RecStg_s_I_f.APP_ID = RecStg_I_f.APP_ID)) value_I_f  --Added for 1.1
+	 ,p_ics_run_id
+     , RecStg_I_f.FORM_OIC_ID
+from
+       XXTWC_FULCRUM_RECORD_STG RecStg_I_f  ,"XXICS"."XXTWC_FULCRUM_FORM" stg_i_f 
+      where 1=1
+      and RecStg_I_f.node_name = 'key' 
+      and (RecStg_I_f.NODE_VALUE = stg_i_f.key or RecStg_I_f.NODE_VALUE like '%'||stg_i_f.key||'%')
+      and stg_i_f.level_number = I
+      and stg_i_f.type not in('Repeatable')
+      and RecStg_I_f.PARENT_NODE_ID like level_I_header_u.parent_node_id_a||'%'
+      --Commented for 1.1
+	  --and RecStg_I_f.oic_id = p_ics_run_id  AND RecStg_I_f.BUSINESS_UNIT = p_business_unit and RecStg_I_f.APP_NAME = p_app_name and RecStg_I_f.STATUS = 'NEW'
+      --and stg_i_f.oic_id = p_form_oic_id  AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_NAME = p_app_name
+      --and stg_i_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and stg_i_f.APP_NAME = RecStg_I_f.APP_NAME
+      --Added for 1.1
+	  and RecStg_I_f.oic_id = p_ics_run_id  AND RecStg_I_f.BUSINESS_UNIT = p_business_unit and RecStg_I_f.APP_ID = p_app_id and RecStg_I_f.STATUS = 'NEW'
+      and stg_i_f.oic_id = p_form_oic_id  AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_ID = p_app_id
+      and stg_i_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and stg_i_f.APP_ID = RecStg_I_f.APP_ID	  
+--      and stg_i_f.oic_id = p_ics_run_id AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_NAME = p_app_name and stg_i_f.STATUS = 'NEW'
+--      and stg_i_f.oic_id = Recstg_i_f.oic_id  AND stg_i_f.BUSINESS_UNIT = Recstg_i_f.BUSINESS_UNIT and stg_i_f.APP_NAME = Recstg_i_f.APP_NAME and stg_i_f.STATUS = 'NEW'
+      order by stg_i_f.row_num,RecStg_I_f.PARENT_NODE_ID;
+
+ELSIF I = 5 THEN
+
+INSERT INTO XXTWC_FULCRUM_RECORD_LEVEL5
+(
+                         BUSINESS_UNIT
+                        , APP_NAME
+                        , APP_ID			    --Added for 1.1			
+                        , DATA_KEY0   
+						, DATA_KEY1
+						, DATA_KEY2
+						, DATA_KEY3
+						, DATA_KEY4
+						, DATA_KEY5
+						, COLUMN_KEY
+                        , COLUMN_NAME 
+                        , COLUMN_VALUE
+                        , OIC_ID      
+                        , FORM_OIC_ID
+)
+      select
+--     RecStg_I_f.parent_node_id parent_node_id_I_f
+       RecStg_I_f.BUSINESS_UNIT  BUSINESS_UNIT_I_f
+     , RecStg_I_f.APP_NAME       APP_NAME_I_f
+     , RecStg_I_f.APP_ID         APP_ID_I_f     --Added for 1.1
+	 , l_level0_key
+	 , l_level1_key
+	 , l_level2_key
+	 , l_level3_key
+	 , l_level4_key
+	 , l_level5_key
+     , RecStg_I_f.NODE_VALUE     NODE_VALUE_I_f
+	 , stg_I_f.DATA_NAME    DATA_NAME_I_f
+--     ,(select node_value from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_f where RecStg_s_I_f.NODE_ID like RecStg_I_f.PARENT_NODE_ID and
+--     RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and RecStg_s_I_f.APP_NAME = RecStg_I_f.APP_NAME) value_I_f
+     ,(select 
+	case when stg_i_f.TYPE in ('PhotoField','VideoField','AttachmentField','SignatureField','AudioField') 
+	then XXTWC_FULCRUM_PAAS_SYNC_PKG.GET_MEDIA_URL(P_MEDIA_ID 	=> val,
+				         P_FIELD_TYPE 				=> stg_i_f.TYPE,
+						 P_INTERFACE_RUN_ID  		=> P_INTERFACE_RUN_ID,
+						 P_FORM_OIC_ID              => P_FORM_OIC_ID,
+						 P_ICS_RUN_ID				=> P_ICS_RUN_ID)
+	else val
+	end as URL
+	from(select listagg(node_value,' ')within group (order by RecStg_s_I_f.NODE_ID)val from XXTWC_FULCRUM_RECORD_STG RecStg_s_I_f where 
+     (RecStg_s_I_f.NODE_ID like 
+     case when stg_i_f.TYPE in ('ChoiceField','ClassificationField','AddressField') then RecStg_I_f.PARENT_NODE_ID||'%'
+	 when stg_i_f.TYPE in ('PhotoField','VideoField','AttachmentField','AddressField','AudioField') then RecStg_I_f.PARENT_NODE_ID || '.2.2'
+     when stg_i_f.TYPE in ('SignatureField') then RecStg_I_f.PARENT_NODE_ID || '.2'
+     ELSE RecStg_I_f.PARENT_NODE_ID end
+     and RecStg_s_I_f.node_name = 
+     case when stg_i_f.TYPE in ('ChoiceField','ClassificationField','PhotoField','VideoField','AttachmentField','AddressField','AudioField','SignatureField') then 'string'
+     ELSE RecStg_s_I_f.node_name end
+      ) and
+     --RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and RecStg_s_I_f.APP_NAME = RecStg_I_f.APP_NAME) value_I_f  --Commented for 1.1
+	 RecStg_s_I_f.oic_id = RecStg_I_f.oic_id  AND RecStg_s_I_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT 
+	 and RecStg_s_I_f.APP_ID = RecStg_I_f.APP_ID)) value_I_f    --Added for 1.1
+	 , p_ics_run_id
+     , RecStg_I_f.FORM_OIC_ID
+from
+       XXTWC_FULCRUM_RECORD_STG RecStg_I_f  ,"XXICS"."XXTWC_FULCRUM_FORM" stg_i_f 
+      where 1=1
+      and RecStg_I_f.node_name = 'key' 
+      and (RecStg_I_f.NODE_VALUE = stg_i_f.key or RecStg_I_f.NODE_VALUE like '%'||stg_i_f.key||'%')
+      and stg_i_f.level_number = I
+      and stg_i_f.type not in('Repeatable')
+      and RecStg_I_f.PARENT_NODE_ID like level_I_header_u.parent_node_id_a||'%'
+      --Commented for 1.1
+	  --and RecStg_I_f.oic_id = p_ics_run_id  AND RecStg_I_f.BUSINESS_UNIT = p_business_unit and RecStg_I_f.APP_NAME = p_app_name and RecStg_I_f.STATUS = 'NEW'
+      --and stg_i_f.oic_id = p_form_oic_id  AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_NAME = p_app_name
+      --and stg_i_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and stg_i_f.APP_NAME = RecStg_I_f.APP_NAME
+	  --Added for 1.1
+      and RecStg_I_f.oic_id = p_ics_run_id  AND RecStg_I_f.BUSINESS_UNIT = p_business_unit and RecStg_I_f.APP_ID = p_app_id and RecStg_I_f.STATUS = 'NEW'
+      and stg_i_f.oic_id = p_form_oic_id  AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_ID = p_app_id
+      and stg_i_f.BUSINESS_UNIT = RecStg_I_f.BUSINESS_UNIT and stg_i_f.APP_ID = RecStg_I_f.APP_ID
+	  --End of Addition for 1.1
+--      and stg_i_f.oic_id = p_ics_run_id AND stg_i_f.BUSINESS_UNIT = p_business_unit and stg_i_f.APP_NAME = p_app_name and stg_i_f.STATUS = 'NEW'
+--      and stg_i_f.oic_id = Recstg_i_f.oic_id  AND stg_i_f.BUSINESS_UNIT = Recstg_i_f.BUSINESS_UNIT and stg_i_f.APP_NAME = Recstg_i_f.APP_NAME and stg_i_f.STATUS = 'NEW'
+      order by stg_i_f.row_num,RecStg_I_f.PARENT_NODE_ID;
+END IF;
+
+end loop;
+end loop;
+end loop;
+end loop;
+
+    XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.11 - Inserting into Level tables completed - '
+    ||' - l_interface_run_id - '|| p_interface_run_id, p_process_id => p_interface_run_id );
+    EXCEPTION    
+    WHEN OTHERS THEN
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.10.1E - Execption Inserting into Level tables - '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_interface_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := '1.10.1E - Execption Inserting into Level tables - '
+        ||SUBSTR(SQLERRM,1,2000);
+
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'ERROR'
+             , ERROR_MESSAGE = x_error_msg
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'RECORDS'
+               AND BUSINESS_UNIT = p_business_unit
+               --AND APP_NAME      = p_app_name   --Commented for Version1.1
+			   AND APP_ID      = p_app_id         --Added for Version1.1
+        ;
+
+    END;
+        END IF;
+
+IF x_status  = 'SUCCESS' THEN 
+ UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'SUCCESS'
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'RECORDS'
+               AND BUSINESS_UNIT = p_business_unit
+               --AND APP_NAME      = p_app_name  ;         --Commented for Version1.1
+			   AND APP_ID      = p_app_id  ;               --Added for Version1.1
+
+
+	UPDATE XXTWC_FULCRUM_APPS
+	   SET data_updated_since = p_date_updated_since,
+	       oic_id = p_ics_run_id,
+	       last_update_date = SYSTIMESTAMP
+     WHERE --app_name = p_app_name           --Commented for Version1.1
+	       app_id = p_app_id                 --Added for Version1.1
+     and BUSINESS_UNIT = p_business_unit;
+
+END IF;
+
+EXCEPTION    
+    WHEN OTHERS THEN
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.10E - Execption in LOAD_FORM_DATA procedure- '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_interface_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := '1.10E - Execption in LOAD_FORM_DATA procedure - '
+        ||SUBSTR(SQLERRM,1,2000);
+
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'ERROR'
+             , ERROR_MESSAGE = x_error_msg
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'RECORDS'
+               AND BUSINESS_UNIT = p_business_unit
+               --AND APP_NAME      = p_app_name       --Commented for Version1.1
+			   AND APP_ID     = p_app_id              --Added for Version1.1
+        ;
+
+END LOAD_FORM_DATA;
+
+PROCEDURE  JOB_SCHEDULER_LOAD_FORM_DATA
+                                      (
+                                          p_ics_run_id         IN VARCHAR2
+                                        , p_form_oic_id        IN VARCHAR2
+                                        , p_form_key           IN VARCHAR2
+                                        , p_business_unit      IN VARCHAR2
+                                        , p_app_name           IN VARCHAR2
+										, p_app_id             IN     VARCHAR2          --Added version 1.1
+                                        , p_interface_run_id   IN VARCHAR2
+                                        , p_date_updated_since IN VARCHAR2
+                                        , x_status OUT            VARCHAR2
+                                        , x_error_msg OUT         VARCHAR2
+                                      )
+as
+    l_procedure VARCHAR2 (250) := 'JOB_SCHEDULER_LOAD_FORM_DATA';
+
+begin
+x_status := 'SUCCESS';
+    xxtwc_log_pkg.add_info_log ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.1 - Started : p_interface_run_id - '
+    ||p_interface_run_id, p_process_id => p_interface_run_id);
+    dbms_scheduler.create_job(job_name => 'Fulcrum_Load_Form_Data', job_type => 'PLSQL_BLOCK', job_action => 'xxics.XXTWC_FULCRUM_PAAS_SYNC_PKG.LOAD_FORM_DATA (
+                                                P_ICS_RUN_ID   => '||''''|| p_ics_run_id||''''|| ',
+                                                P_FORM_OIC_ID   => '||''''|| p_form_oic_id||''''|| ',
+                                                P_FORM_KEY   => '||''''|| p_form_key||''''|| ',
+                                                P_BUSINESS_UNIT   => '||''''|| p_business_unit||''''|| ',
+                                                P_APP_NAME   => '||''''|| p_app_name||''''|| ',
+												P_APP_ID   => '||''''|| p_app_id||''''|| ',            --Added for Version 1.1
+                                                P_INTERFACE_RUN_ID   => '||''''|| p_interface_run_id||''''|| ',
+                                                P_DATE_UPDATED_SINCE   => '||''''|| p_date_updated_since||''''|| ');' 
+                                                , enabled => true , auto_drop => true);
+EXCEPTION
+WHEN OTHERS THEN
+ XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.10E - Execption in JOB_SCHEDULER_LOAD_FORM_DATA procedure- '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_interface_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := '1.10E - Execption in JOB_SCHEDULER_LOAD_FORM_DATA procedure - '
+        ||SUBSTR(SQLERRM,1,2000);
+
+        UPDATE
+               XXTWC_FULCRUM_RAWDATA
+        SET    status           = 'ERROR'
+             , ERROR_MESSAGE = x_error_msg
+             , LAST_UPDATE_DATE = SYSTIMESTAMP
+        WHERE
+               OIC_ID            = p_ics_run_id
+               AND TYPE          = 'RECORDS'
+               AND BUSINESS_UNIT = p_business_unit
+               --AND APP_NAME      = p_app_name         --Commented for Version1.1
+			   AND APP_ID      = p_app_id               --Added for Version1.1
+        ; 
+end JOB_SCHEDULER_LOAD_FORM_DATA;
+
+PROCEDURE LOAD_CONFIG_DATA
+                        (
+                            p_ics_run_id       IN      VARCHAR2
+                          , p_business_unit    IN      VARCHAR2
+                          , p_app_name         IN      VARCHAR2
+						  , p_app_id           IN     VARCHAR2          --Added version 1.1
+                          , p_interface_run_id IN      VARCHAR2
+                          , x_status           OUT     VARCHAR2
+                          , x_error_msg        OUT     VARCHAR2
+                        )
+AS
+    l_procedure VARCHAR2(250) := 'LOAD_CONFIG_DATA';
+BEGIN
+	x_status := 'SUCCESS';
+
+	XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.12 - Inserting into XXTWC_FULCRUM_APPS start - '
+	||' - l_interface_run_id - '|| p_interface_run_id, p_process_id => p_interface_run_id );
+
+
+
+	MERGE INTO XXTWC_FULCRUM_APPS e
+    USING (SELECT business_unit,
+				  app_name,
+				  app_id,
+				  UPPER(enabled) enabled,
+				  SYSTIMESTAMP   created_date,
+				  SYSTIMESTAMP   last_update_date,
+				  p_ics_run_id   oic_id,
+				  'FORMTOSYNC'   form_type
+			 FROM (SELECT data_key0,
+			 			  column_value,
+			 			  column_name
+			 	     FROM XXTWC_FULCRUM_RECORD_LEVEL0 t
+			 	    WHERE oic_id = p_ics_run_id
+			 		  --AND app_name = p_app_name          --Commented for Version1.1
+					  AND app_id = p_app_id                --Added for Version1.1 
+			 		  AND business_unit = p_business_unit
+			 	  ) PIVOT (
+			 				 MIN(column_value)
+			 				 FOR column_name
+			 				 IN ( 'business_unit' AS business_unit, 'form_name' AS app_name, 'form_id' AS app_id, 'enable_sync' AS enabled )
+			 			  )) h
+    ON (e.app_id = h.app_id)
+    WHEN MATCHED THEN
+       UPDATE SET e.app_name = h.app_name,
+	   		      e.enabled = h.enabled,
+	   		      e.last_update_date = h.last_update_date,
+	   		      e.oic_id = h.oic_id,
+	   		      e.form_type = h.form_type
+    WHEN NOT MATCHED THEN
+       INSERT ( 	business_unit
+	   		      , app_name
+	   		      , app_id
+	   		      , enabled
+	   		      , created_date
+	   		      , last_update_date
+	   		      , oic_id
+	   		      , form_type)
+       VALUES (    h.business_unit
+	   		     , h.app_name
+	   		     , h.app_id
+	   		     , h.enabled
+	   		     , h.created_date
+	   		     , h.last_update_date
+	   		     , h.oic_id
+	   		     , h.form_type
+			  );
+
+	XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.13 - Inserting into XXTWC_FULCRUM_APPS completed - '
+	||' - l_interface_run_id - '|| p_interface_run_id, p_process_id => p_interface_run_id );
+
+EXCEPTION
+    WHEN OTHERS THEN
+        XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.13E - Execption Inserting into XXTWC_FULCRUM_APPS - '
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_interface_run_id );
+        x_status    := 'ERROR';
+        x_error_msg := 'Execption Inserting into XXTWC_FULCRUM_APPS - '
+        ||SUBSTR(SQLERRM,1,2000);   
+
+END LOAD_CONFIG_DATA;
+
+FUNCTION GET_MEDIA_URL(
+                         P_MEDIA_ID 			IN VARCHAR2,
+				         P_FIELD_TYPE 			IN VARCHAR2,
+						 P_INTERFACE_RUN_ID  	IN VARCHAR2,
+						 P_FORM_OIC_ID          IN VARCHAR2,
+						 P_ICS_RUN_ID			IN VARCHAR2
+						 )
+RETURN VARCHAR2
+AS 
+
+lv_response 		CLOB;
+lv_statuscode 		VARCHAR2(1000);
+lv_url 				VARCHAR2(1000);
+lv_token 			VARCHAR2(1000) := '8de263c03e317dfe385479f81f3c298fc3f40f502420f01fa0a6de2004fad12e6ac4248245469793';
+l_original_url  	VARCHAR2(10000);
+l_procedure         VARCHAR2 (250) := 'GET_MEDIA_URL';
+begin
+
+CASE WHEN P_FIELD_TYPE = 'SignatureField'   
+	THEN 
+				   XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => 'Called API of '||P_FIELD_TYPE||' for '||P_FORM_OIC_ID, p_process_id => p_ics_run_id );
+
+		begin
+		       lv_url := 'https://api.fulcrumapp.com/api/v2/signatures/'|| P_MEDIA_ID;
+
+                apex_web_service.g_request_headers(1).name  := 'Accept';
+                apex_web_service.g_request_headers(1).value := 'application/json'; 
+                apex_web_service.g_request_headers(2).name  := 'X-ApiToken';
+                apex_web_service.g_request_headers(2).value := lv_token;
+
+                lv_response := apex_web_service.make_rest_request(p_url => lv_url , 
+                                                                p_http_method => 'GET',
+                                                                p_wallet_path   => XXTWC_INTERFACE_UTILS_PKG.get_wallet_path,
+                                                                p_wallet_pwd    => XXTWC_INTERFACE_UTILS_PKG.get_wallet_pwd);
+
+				lv_statuscode := APEX_WEB_SERVICE.G_STATUS_CODE;
+
+				   XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => 'Called API of '||P_FIELD_TYPE||' for '||P_FORM_OIC_ID, p_process_id => p_ics_run_id );
+
+		end;
+
+         IF lv_statuscode IN (200, 201) THEN
+		 apex_json.parse (lv_response);
+		 l_original_url := JSON_VALUE(lv_response,'$.signature.original');
+        END IF;
+
+
+     WHEN P_FIELD_TYPE = 'PhotoField'      
+	 THEN 
+
+	 begin
+		       lv_url := 'https://api.fulcrumapp.com/api/v2/photos/'|| P_MEDIA_ID;
+
+                apex_web_service.g_request_headers(1).name  := 'Accept';
+                apex_web_service.g_request_headers(1).value := 'application/json';
+                apex_web_service.g_request_headers(2).name  := 'X-ApiToken';
+                apex_web_service.g_request_headers(2).value := lv_token;
+
+                lv_response := apex_web_service.make_rest_request(p_url => lv_url , 
+                                                                p_http_method => 'GET',
+                                                                p_wallet_path   => XXTWC_INTERFACE_UTILS_PKG.get_wallet_path,
+                                                                p_wallet_pwd    => XXTWC_INTERFACE_UTILS_PKG.get_wallet_pwd);
+
+				lv_statuscode := APEX_WEB_SERVICE.G_STATUS_CODE;
+
+			XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => 'Called API of '||P_FIELD_TYPE||' for '||P_FORM_OIC_ID, p_process_id => p_ics_run_id );
+
+		end;
+
+         IF lv_statuscode IN (200, 201) 
+		 THEN
+		 apex_json.parse (lv_response);
+		 --l_original_url := apex_json.get_varchar2 (p_path => 'photo[%d].original');
+		 l_original_url := JSON_VALUE(lv_response,'$.photo.original');
+        END IF;
+
+	 WHEN P_FIELD_TYPE = 'VideoField'      
+	 THEN 
+
+	 begin
+		       lv_url := 'https://api.fulcrumapp.com/api/v2/videos/'|| P_MEDIA_ID;
+
+                apex_web_service.g_request_headers(1).name  := 'Accept';
+                apex_web_service.g_request_headers(1).value := 'application/json';
+                apex_web_service.g_request_headers(2).name  := 'X-ApiToken';
+                apex_web_service.g_request_headers(2).value := lv_token;
+
+                lv_response := apex_web_service.make_rest_request(p_url => lv_url , 
+                                                                p_http_method => 'GET',
+                                                                p_wallet_path   => XXTWC_INTERFACE_UTILS_PKG.get_wallet_path,
+                                                                p_wallet_pwd    => XXTWC_INTERFACE_UTILS_PKG.get_wallet_pwd);
+
+				lv_statuscode := APEX_WEB_SERVICE.G_STATUS_CODE;
+
+			XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => 'Called API of '||P_FIELD_TYPE||' for '||P_FORM_OIC_ID, p_process_id => p_ics_run_id );
+
+		end;
+
+         IF lv_statuscode IN (200, 201) THEN
+		 apex_json.parse (lv_response);
+		 --l_original_url := apex_json.get_varchar2 (p_path => 'video[%d].original');
+		 l_original_url := JSON_VALUE(lv_response,'$.video.original');
+        END IF;
+
+	 WHEN P_FIELD_TYPE = 'AudioField'      
+	 THEN 
+
+	 begin
+		       lv_url := 'https://api.fulcrumapp.com/api/v2/audio/'|| P_MEDIA_ID;
+
+                apex_web_service.g_request_headers(1).name  := 'Accept';
+                apex_web_service.g_request_headers(1).value := 'application/json';
+                apex_web_service.g_request_headers(2).name  := 'X-ApiToken';
+                apex_web_service.g_request_headers(2).value := lv_token;
+
+                lv_response := apex_web_service.make_rest_request(p_url => lv_url , 
+                                                                p_http_method => 'GET',
+                                                                p_wallet_path   => XXTWC_INTERFACE_UTILS_PKG.get_wallet_path,
+                                                                p_wallet_pwd    => XXTWC_INTERFACE_UTILS_PKG.get_wallet_pwd);
+
+				lv_statuscode := APEX_WEB_SERVICE.G_STATUS_CODE;
+
+			 XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => 'Called API of '||P_FIELD_TYPE||' for '||P_FORM_OIC_ID, p_process_id => p_ics_run_id );
+
+		end;
+
+         IF lv_statuscode IN (200, 201) THEN
+		 apex_json.parse (lv_response);
+		 --l_original_url := apex_json.get_varchar2 (p_path => 'audio[%d].original');
+		 l_original_url := JSON_VALUE(lv_response,'$.audio.original');
+        END IF;
+
+	 WHEN P_FIELD_TYPE = 'AttachmentField' 
+	 THEN 
+
+	 begin
+		       lv_url := 'https://api.fulcrumapp.com/api/v2/attachments/'|| P_MEDIA_ID;
+
+                apex_web_service.g_request_headers(1).name  := 'Accept';
+                apex_web_service.g_request_headers(1).value := 'application/json';
+                apex_web_service.g_request_headers(2).name  := 'X-ApiToken';
+                apex_web_service.g_request_headers(2).value := lv_token;
+
+                lv_response := apex_web_service.make_rest_request(p_url => lv_url , 
+                                                                p_http_method => 'GET',
+                                                                p_wallet_path   => XXTWC_INTERFACE_UTILS_PKG.get_wallet_path,
+                                                                p_wallet_pwd    => XXTWC_INTERFACE_UTILS_PKG.get_wallet_pwd);
+
+				lv_statuscode := APEX_WEB_SERVICE.G_STATUS_CODE;
+
+			 XXTWC_LOG_PKG.ADD_INFO_LOG ( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => 'Called API of '||P_FIELD_TYPE||' for '||P_FORM_OIC_ID, p_process_id => p_ics_run_id );
+
+		end;
+
+         IF lv_statuscode IN (200, 201) THEN
+		 apex_json.parse (lv_response);
+		  l_original_url := JSON_VALUE(lv_response,'$.url');
+        END IF;
+
+ELSE    
+l_original_url := NULL; 
+END CASE;
+
+    return l_original_url;
+
+    EXCEPTION
+    WHEN OTHERS THEN
+        XXTWC_LOG_PKG.ADD_INFO_LOG 
+		( p_module => g_module, p_package => g_package, p_procedure => l_procedure, p_text => '1.2E - Error from - '||l_procedure
+        ||SUBSTR(SQLERRM,1,2000), p_process_id => p_ics_run_id );
+	return l_original_url;
+end GET_MEDIA_URL;
+END XXTWC_FULCRUM_PAAS_SYNC_PKG;
