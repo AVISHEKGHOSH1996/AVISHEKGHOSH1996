@@ -1,0 +1,3738 @@
+create or replace PACKAGE BODY XXTWC_CLAIMS_EMAIL_NOTFICATION_PKG
+AS 
+/*PROCEDURE FOR EMAIL NOTIFICATION WHEN CLAIM IS SUBMIT*/
+PROCEDURE SEND_EMAIL_FOR_SUBMIT (
+	P_CLAIM_TYPES 		VARCHAR2,
+	P_CLAIM_ID          NUMBER
+)IS
+
+    l_id NUMBER;
+    lv_to_email VARCHAR2(5000);
+    lv_email VARCHAR2(500);
+    lv_created_by VARCHAR2(500);
+    lv_name VARCHAR2(500);
+    lv_query VARCHAR2(4000);
+    lv_claim_amount NUMBER;
+    lv_wf_id NUMBER;
+    lv_seq NUMBER;
+    lv_claim_id NUMBER;
+    lv_claim_date DATE;
+    lv_claim_number VARCHAR2(1000);
+    lv_org_id NUMBER;
+    lv_appr_lvl_hdr_id NUMBER;
+    LV_DIRECT_FLAG NUMBER;
+	LV_EMAIL_HEADER VARCHAR2(1000);
+	LV_EMAIL_BODY CLOB;
+	lv_wf_next_seq_no NUMBER;
+	lv_department VARCHAR2(200);
+	lv_salesmanager VARCHAR2(500);
+    LV_SALESMANAGER_ID NUMBER;
+    LV_LOOKUP_VALUE VARCHAR2(500);
+	LV_LOGIN_URL    VARCHAR2(1000);
+	LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+	LV_ORDER_NUMBER  VARCHAR2(1000);
+	LV_EMAIL_CC VARCHAR2(4000);
+	LV_CLAIM_TYPE VARCHAR2(1000);
+	LV_SHIP_TO_CUSTOMER_NAME VARCHAR2(1000);
+	LV_TABLE_DATA VARCHAR2(10000) := '<tr>
+<td  style="border : 1px solid; text-align: center;"> #ORIGINAL_ORDER_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_TYPE#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON#</td>
+<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+<td  style="border : 1px solid; text-align: center;"> #ITEM_DESCRIPTION#</td>
+<td  style="border : 1px solid; text-align: center;"> #UNIT#</td>
+<td  style="border : 1px solid; text-align: center;"> #VARIETY#</td>
+<td  style="border : 1px solid; text-align: center;"> #REGION#</td>
+<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN#</td>
+<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_AMOUNT# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+<td  style="border : 1px solid; text-align: center;"> #NAME#</td>
+</tr>';
+	LV_REPLACED_DATA VARCHAR2(30000);
+	LV_SALES_PERSON_EMAIL VARCHAR2(1000);
+	LV_SALES_PERSON_USER_ID NUMBER;
+	LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+    LV_MISSING_LOT VARCHAR2(10);
+	LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+	
+BEGIN
+SELECT
+    ch.claim_number,
+    ch.claim_id,
+    wh.appr_lvl_hdr_id,
+    ch.org_id,
+    ch.wf_id,
+    ch.claim_amount,
+    ch.claim_date,
+	ch.wf_next_seq_no,
+	ch.department,
+    ch.salesmanager,
+	ch.SOLD_TO_CUSTOMER_NAME,
+	ch.ORDER_NUMBER,
+	(SELECT LOOKUP_VALUE 
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = CH.CLAIM_TYPE) CLAIM_TYPE,
+	ch.SHIP_TO_CUSTOMER_NAME,
+	(SELECT 
+	UPPER(EMAIL_ADDRESS) 
+    FROM fusion.jtf_rs_salesreps jrs,
+        fusion.hz_parties hp_sales
+    WHERE jrs.resource_id = hp_sales.party_id  
+    AND jrs.status ='A'
+    AND hp_sales.status ='A'
+    AND SYSDATE BETWEEN jrs.start_date_active and jrs.end_date_active
+    and hp_sales.party_id = CH.SALES_PERSON_ID) SALES_PERSON_EMAIL
+INTO
+    lv_claim_number,
+    lv_claim_id,
+    lv_appr_lvl_hdr_id,
+    lv_org_id,
+    lv_wf_id,
+    lv_claim_amount,
+    lv_claim_date,
+	lv_wf_next_seq_no,
+	lv_department,
+	lv_salesmanager,
+	LV_SOLD_TO_CUSTOMER_NAME,
+	LV_ORDER_NUMBER,
+	LV_CLAIM_TYPE,
+	LV_SHIP_TO_CUSTOMER_NAME,
+	LV_SALES_PERSON_EMAIL
+	
+FROM
+    xxtwc_claims_headers        ch,
+    xxtwc_claims_appr_wf_header wh
+WHERE
+        ch.wf_id = wh.wf_id
+    AND claim_id = P_CLAIM_ID;
+	
+	
+	/*FOR I IN (SELECT (SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                SHIP_DATE,
+                    ITEM_COUNTRY_OF_ORIG,
+                    ITEM_REGION,
+                    ITEM_VARIETY,
+	                INVENTORY_ITEM_DESC,
+	                UOM,
+	                SHIP_QTY,
+	                CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES WHERE claim_id = P_CLAIM_ID AND CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+	
+	IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;*/
+    
+    FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+	IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+	
+	
+	BEGIN
+	IF lv_wf_next_seq_no = 10.1
+	THEN 
+	
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y'
+    AND GU.GROUP_ID IN
+	(SELECT TO_CHAR(GROUP_ID) FROM XXTWC_CLAIMS_APPR_GROUPS 
+    WHERE GROUP_NAME = 'Import Claim Owner Approval');
+	
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'SUBMITTED_CLAIM_FOR_IMPORT_CLAIM_APPROVAL';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL;
+END;                
+                	
+	ELSIF lv_wf_next_seq_no = 11
+	THEN
+	BEGIN
+    SELECT USER_ID
+    INTO LV_SALESMANAGER_ID
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS
+    WHERE UPPER(EMAIL_ID) = UPPER(lv_salesmanager)
+	AND ACTIVE_FLG = 'Y';
+    EXCEPTION
+    WHEN OTHERS
+    THEN LV_SALESMANAGER_ID := NULL;
+    END;
+    
+    BEGIN
+	SELECT USER_ID
+	INTO LV_SALES_PERSON_USER_ID 
+	FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS
+	WHERE UPPER(EMAIL_ID) = LV_SALES_PERSON_EMAIL
+	AND ACTIVE_FLG = 'Y';
+	EXCEPTION WHEN OTHERS THEN 
+	LV_SALES_PERSON_USER_ID := NULL;
+    END;	
+    
+	IF LV_SALESMANAGER_ID IS NOT NULL
+	THEN LV_TO_EMAIL := lv_salesmanager;
+	ELSIF LV_SALES_PERSON_USER_ID IS NOT NULL
+	THEN LV_TO_EMAIL := LV_SALES_PERSON_EMAIL;
+	ELSE
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU, XXTWC_CLAIMS_APPR_GROUPS G
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.GROUP_ID = G.GROUP_ID
+    AND G.GROUP_NAME = 'Claim Owner'
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y';
+	END IF;
+	
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'SUBMITTED_CLAIM_FOR_CLAIM_OWNER_APPROVAL';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL; 
+END;
+	
+	
+	ELSE
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y'
+    AND GU.GROUP_ID IN
+	(SELECT GROUP_ID
+				FROM XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID
+				AND ALH.HIERARCHY_NAME = 'Finance'
+				AND lv_claim_amount BETWEEN ALD.MIN_VALUE AND ALD.MAX_VALUE
+				AND ALH.ORG_ID = LV_ORG_ID
+				AND ALD.GROUP_ID  IS NOT NULL);
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'SUBMITTED_CLAIM_FOR_FINANCE_APPROVAL';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL;
+END;                
+                
+	END IF;
+	END;
+
+	
+
+    BEGIN
+        SELECT
+        FIRSTNAME || ' ' || (CASE WHEN FIRSTNAME = LASTNAME THEN NULL ELSE LASTNAME END) NAME,
+        EMAIL_ID  
+        INTO 
+        LV_NAME,
+        LV_EMAIL
+        FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L
+        WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+        AND L.CLAIM_ID = LV_CLAIM_ID AND "ACTION" = 'Review Claim and Submit'
+        AND L.STATUS <> 0
+        AND D.ACTIVE_FLG = 'Y';
+    EXCEPTION
+        WHEN OTHERS THEN
+        LV_NAME := NULL;
+        LV_EMAIL := NULL;
+    END;
+    
+    BEGIN
+    SELECT LOOKUP_VALUE 
+    INTO LV_LOOKUP_VALUE
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = P_CLAIM_TYPES;
+    END;
+	
+	BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+	END;
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_LOOKUP_VALUE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+
+
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+
+ IF LV_EMAIL_BODY IS NOT NULL AND LV_TO_EMAIL IS NOT NULL
+ THEN
+    BEGIN
+    l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => LV_TO_EMAIL,
+        p_body               => LV_EMAIL_BODY,
+		p_cc                 => LV_EMAIL_CC,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER
+        );
+        APEX_MAIL.PUSH_QUEUE;
+END;
+END IF;
+END SEND_EMAIL_FOR_SUBMIT;
+/*PROCEDURE FOR EMAIL NOTIFICATION WHEN CLAIM IS APPROVED*/
+
+PROCEDURE SEND_EMAIL_FOR_DEPARTMENTAL_HIERARCHY_APPROVAL (
+	P_CLAIM_ID          NUMBER,
+	P_CLAIM_DATE        DATE
+)IS
+
+l_id NUMBER;
+LV_TO_EMAIL VARCHAR2(5000);
+LV_EMAIL VARCHAR2(500);
+LV_CREATED_BY VARCHAR2(500);
+LV_NAME VARCHAR2(500);
+lv_query varchar2(4000);
+lv_claim_amount NUMBER;
+LV_WF_ID NUMBER;
+LV_SEQ NUMBER;
+LV_CLAIM_ID NUMBER;
+LV_CLAIM_DATE DATE;
+LV_CLAIM_NUMBER VARCHAR2(1000);
+LV_ORG_ID NUMBER;
+LV_GROUP_ID varchar2(4000);
+LV_MAX_GROUP_ID varchar2(4000);
+LV_COUNT_GROUP_ID NUMBER;
+LV_COUNT_SEQ NUMBER;
+LV_DIRECT_FLAG NUMBER;
+LV_APPR_LVL_HDR_ID NUMBER;
+LV_EMAIL_HEADER VARCHAR2(1000);
+LV_EMAIL_BODY CLOB;
+LV_EMAIL_HEADER_APP VARCHAR2(1000);
+LV_EMAIL_BODY_APP CLOB;
+LV_CLAIM_TYPES VARCHAR2(1000);
+LV_WF_NEXT_SEQ_NO NUMBER;
+LV_WAREHOUSE_CODE VARCHAR2(1000);
+LV_LOGIN_URL VARCHAR2(1000);
+LV_DEPARTMENT VARCHAR2(1000);
+LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+LV_ORDER_NUMBER  VARCHAR2(1000);
+LV_EMAIL_CC  VARCHAR2(4000);
+LV_EMAIL_CC_APP VARCHAR2(4000);
+LV_TABLE_DATA VARCHAR2(10000) := '<tr>
+<td  style="border : 1px solid; text-align: center;"> #ORIGINAL_ORDER_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_TYPE#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON#</td>
+<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+<td  style="border : 1px solid; text-align: center;"> #ITEM_DESCRIPTION#</td>
+<td  style="border : 1px solid; text-align: center;"> #UNIT#</td>
+<td  style="border : 1px solid; text-align: center;"> #VARIETY#</td>
+<td  style="border : 1px solid; text-align: center;"> #REGION#</td>
+<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN#</td>
+<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_AMOUNT# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+<td  style="border : 1px solid; text-align: center;"> #NAME#</td>
+</tr>';
+	LV_REPLACED_DATA VARCHAR2(30000);
+    LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+	LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+	
+BEGIN
+
+LV_CLAIM_ID := P_CLAIM_ID; 
+
+SELECT 
+WF_ID,
+DEPARTMENT,
+CLAIM_AMOUNT,
+CLAIM_DATE,
+ORG_ID,
+CLAIM_NUMBER,
+WAREHOUSE_CODE,
+(SELECT LOOKUP_VALUE 
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = CLAIM_TYPE) CLAIM_TYPE,
+WF_NEXT_SEQ_NO,
+SOLD_TO_CUSTOMER_NAME,
+ORDER_NUMBER,
+claim_id
+
+INTO 
+LV_WF_ID,
+LV_DEPARTMENT,
+LV_CLAIM_AMOUNT,
+LV_CLAIM_DATE,
+LV_ORG_ID,
+LV_CLAIM_NUMBER,
+LV_WAREHOUSE_CODE,
+LV_CLAIM_TYPES,
+LV_WF_NEXT_SEQ_NO,
+LV_SOLD_TO_CUSTOMER_NAME,
+LV_ORDER_NUMBER,
+LV_CLAIM_ID
+FROM XXTWC_CLAIMS_HEADERS
+WHERE CLAIM_ID = P_CLAIM_ID; 
+
+FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+    
+    IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+
+SELECT SEQ , NVL(WH.DIRECT_FLAG,0),APPR_LVL_HDR_ID
+INTO LV_SEQ , LV_DIRECT_FLAG, LV_APPR_LVL_HDR_ID
+FROM XXTWC_CLAIMS_APPR_WF_DETAILS WF, XXTWC_CLAIMS_APPR_WF_HEADER WH
+	WHERE WF.WF_ID = WH.WF_ID
+	AND WF.WF_ID = LV_WF_ID
+	AND UPPER(STEP_NAME) = UPPER('Departmental Hierarchy Approval');
+
+BEGIN
+SELECT
+FIRSTNAME || ' ' || (CASE WHEN FIRSTNAME = LASTNAME THEN NULL ELSE LASTNAME END) NAME,
+ EMAIL_ID  
+INTO 
+LV_NAME,
+LV_EMAIL
+FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L
+WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+AND L.CLAIM_ID = LV_CLAIM_ID AND "ACTION" = 'Review Claim and Submit'
+AND L.STATUS <> 0
+AND D.ACTIVE_FLG = 'Y';
+EXCEPTION
+WHEN OTHERS THEN
+LV_NAME := NULL;
+LV_EMAIL := NULL;
+END;	
+	
+IF LV_WF_NEXT_SEQ_NO = 12 THEN
+BEGIN
+
+lv_query:=q'#SELECT LISTAGG (EMAIL_ID, ',') WITHIN GROUP (ORDER BY USER_ID )  
+from (
+SELECT DISTINCT LD.USER_ID, LD.EMAIL_ID
+FROM XXTWC_CLAIMS_APPR_GROUP_USERS GU, XXTWC_CLAIMS_USER_LOGIN_DETAILS LD, XXTWC_CLAIMS_USER_ORG_DETAILS OD
+WHERE GU.USER_ID = LD.USER_ID 
+AND OD.USER_ID = LD.USER_ID
+AND GU.STATUS = 1
+AND LD.ACTIVE_FLG = 'Y'
+AND LD.DEPT_CODE IN (SELECT CH.DEPARTMENT FROM XXTWC_CLAIMS_HEADERS CH WHERE CH.CLAIM_ID = #'||LV_CLAIM_ID|| q'#)
+AND #'||LV_ORG_ID|| q'# = OD.ORG_ID 
+AND EXISTS (SELECT result AS R FROM (select regexp_substr(OD.WAREHOUSE_CODE, '[^:]+', 1, level) result
+			from DUAL
+				connect by level <= length(regexp_replace(OD.WAREHOUSE_CODE, '[^:]+')) + 1)
+                WHERE RESULT = '#'||LV_WAREHOUSE_CODE|| q'#')
+AND GROUP_ID IN (
+SELECT DISTINCT result 
+FROM (
+WITH RWS AS (
+SELECT GROUP_ID 
+				--INTO 
+				--LV_GROUP_ID  
+                FROM
+	            (SELECT 
+				GROUP_ID 
+				FROM 
+				XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID 
+                AND ALH.APPR_LVL_HDR_ID = #'||LV_APPR_LVL_HDR_ID || q'#
+                AND ((#'||lv_claim_amount || q'# <= ALD.MAX_VALUE        
+				AND #'||lv_claim_amount || q'# >= (CASE WHEN ALD.ATTRIBUTE1 = 1 AND UPPER('#'||LV_DEPARTMENT|| q'#') IN ('OPERATIONS','QUALITY') THEN 0 ELSE ALD.MIN_VALUE END ))
+				OR #'||lv_claim_amount || q'# > ALD.MAX_VALUE)  
+				AND ALH.ORG_ID = #'||LV_ORG_ID || q'#
+				AND NOT EXISTS (SELECT 1 FROM XXTWC_CLAIMS_APPR_WF_ACT_LOG LO
+				WHERE LO.SEQ = #'||LV_SEQ || q'# AND LO.GROUP_ID = ALD.GROUP_ID AND LO.WF_ID = #'||LV_WF_ID || q'# AND LO.CLAIM_ID = #'||P_CLAIM_ID || q'#)
+				AND ALD.GROUP_ID  IS NOT NULL
+				ORDER BY ALD.MAX_VALUE ASC)
+				WHERE ROWNUM < 2
+)
+
+
+select regexp_substr(GROUP_ID, '[^:]+', 1, level) result
+			from RWS
+				connect by level <= length(regexp_replace(GROUP_ID, '[^:]+')) + 1)))#';
+ 
+EXECUTE IMMEDIATE lv_query into LV_TO_EMAIL;				
+	--dbms_output.put_line(LV_TO_EMAIL);	
+EXCEPTION
+WHEN OTHERS THEN
+LV_TO_EMAIL := NULL;
+XXTWC_CLAIMS_GP_ERROR_PKG.GP_ERROR_LOG ('Error in Dynamic sql of Dept Approve/Reject Email',
+                             SQLCODE,   
+							 SQLERRM, 
+							 V('APP_USER'),
+                             35,
+							 p_claim_id
+                             );
+END;
+
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER_APP,
+LV_EMAIL_BODY_APP,
+LV_EMAIL_CC_APP
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'CLAIM_FOR_DEPARTMENT_APPROVAL';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY_APP := NULL; 
+		LV_EMAIL_CC_APP := NULL;
+END;
+
+BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+END;
+
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '\',NULL); 
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_CLAIM_TYPES);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+--LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER_APP := REPLACE(LV_EMAIL_HEADER_APP, LV_EMAIL_HEADER_APP, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER_APP);
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER_APP := REPLACE(LV_EMAIL_HEADER_APP, LV_EMAIL_HEADER_APP, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER_APP||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER_APP := REPLACE(LV_EMAIL_HEADER_APP, LV_EMAIL_HEADER_APP, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER_APP);
+END IF;
+
+IF  LV_TO_EMAIL IS NOT NULL AND LV_EMAIL_BODY_APP IS NOT NULL
+THEN
+l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => LV_TO_EMAIL,
+		P_CC                 => LV_EMAIL_CC_APP,
+        p_body               => LV_EMAIL_BODY_APP,
+		p_body_html          => LV_EMAIL_BODY_APP,
+        p_subj               => LV_EMAIL_HEADER_APP
+         );
+        APEX_MAIL.PUSH_QUEUE;
+    END IF;
+
+ELSE
+
+SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y'
+    AND GU.GROUP_ID IN
+	(SELECT GROUP_ID
+				FROM XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID
+				AND ALH.HIERARCHY_NAME = 'Finance'
+				AND lv_claim_amount BETWEEN ALD.MIN_VALUE AND ALD.MAX_VALUE
+				AND ALH.ORG_ID = LV_ORG_ID
+				AND ALD.GROUP_ID  IS NOT NULL);
+
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'SUBMITTED_CLAIM_FOR_FINANCE_APPROVAL';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+END; 
+
+BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+END;
+
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL); 
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_CLAIM_TYPES);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+IF LV_EMAIL_BODY IS NOT NULL AND LV_TO_EMAIL IS NOT NULL
+THEN
+l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => LV_TO_EMAIL,
+		P_CC                 => LV_EMAIL_CC,
+        p_body               => LV_EMAIL_BODY,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER
+         );
+        APEX_MAIL.PUSH_QUEUE;
+
+END IF;
+       
+END IF;	
+
+END SEND_EMAIL_FOR_DEPARTMENTAL_HIERARCHY_APPROVAL;
+
+/*PROCEDURE FOR EMAIL NOTIFICATION WHEN CLAIM IS REJECTED*/
+
+PROCEDURE SEND_EMAIL_FOR_REJECTED (
+	P_CLAIM_ID          NUMBER,
+	P_CLAIM_DATE        DATE,
+    P_COMMENTS          VARCHAR2
+)IS
+
+l_id NUMBER;
+LV_EMAIL VARCHAR2(5000);
+LV_CREATED_BY VARCHAR2(500);
+LV_NAME VARCHAR2(500);
+LV_EMAIL_HEADER VARCHAR2(1000);
+LV_EMAIL_BODY CLOB;
+LV_CLAIM_NUMBER VARCHAR2(500);
+LV_CLAIM_AMOUNT NUMBER;
+LV_CLAIM_TYPES VARCHAR2(500);
+LV_LOGIN_URL VARCHAR2(1000);
+LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+LV_ORDER_NUMBER  VARCHAR2(1000);
+LV_EMAIL_CC      VARCHAR2(4000);
+LV_TABLE_DATA VARCHAR2(10000) := '<tr>
+<td  style="border : 1px solid; text-align: center;"> #ORIGINAL_ORDER_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_TYPE#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON#</td>
+<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+<td  style="border : 1px solid; text-align: center;"> #ITEM_DESCRIPTION#</td>
+<td  style="border : 1px solid; text-align: center;"> #UNIT#</td>
+<td  style="border : 1px solid; text-align: center;"> #VARIETY#</td>
+<td  style="border : 1px solid; text-align: center;"> #REGION#</td>
+<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN#</td>
+<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_AMOUNT# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+<td  style="border : 1px solid; text-align: center;"> #NAME#</td>
+<td  style="border : 1px solid; text-align: center;"> #REJECTED_COMMENT#</td>
+</tr>';
+	LV_REPLACED_DATA VARCHAR2(30000);
+	LV_CLAIM_DATE DATE;
+    LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+	LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+    
+BEGIN
+BEGIN
+SELECT
+D.FIRSTNAME || ' ' || (CASE WHEN D.FIRSTNAME = D.LASTNAME THEN NULL ELSE D.LASTNAME END) NAME,
+ D.EMAIL_ID,
+ CH.CLAIM_NUMBER,
+ CH.CLAIM_AMOUNT,
+ (SELECT LOOKUP_VALUE 
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = CH.CLAIM_TYPE) CLAIM_TYPE,
+	CH.SOLD_TO_CUSTOMER_NAME,
+	CH.ORDER_NUMBER,
+    CH.CLAIM_DATE
+INTO 
+LV_NAME,
+LV_EMAIL,
+LV_CLAIM_NUMBER,
+LV_CLAIM_AMOUNT,
+LV_CLAIM_TYPES,
+LV_SOLD_TO_CUSTOMER_NAME,
+LV_ORDER_NUMBER,
+LV_CLAIM_DATE
+FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L, XXTWC_CLAIMS_HEADERS CH
+WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+AND L.CLAIM_ID = P_CLAIM_ID
+AND CH.CLAIM_ID = L.CLAIM_ID
+AND ACTION = 'Review Claim and Submit'
+AND L.STATUS <> 0
+AND D.ACTIVE_FLG = 'Y';
+EXCEPTION
+WHEN OTHERS THEN
+LV_NAME := NULL;
+LV_EMAIL := NULL;
+END;
+
+FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+    IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'CLAIM_FOR_REJECT';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL;
+END;
+
+BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+END;
+
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',''); 
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_CLAIM_TYPES);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REJECTED_COMMENT#',P_COMMENTS);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#NAME#',LV_NAME);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#REJECTED_COMMENT#',LV_NAME);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+IF LV_EMAIL_BODY IS NOT NULL AND LV_EMAIL IS NOT NULL
+THEN 
+BEGIN
+l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => LV_EMAIL,
+		p_cc                 => LV_EMAIL_CC,
+		p_body               => LV_EMAIL_BODY,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER  
+        );
+        APEX_MAIL.PUSH_QUEUE;
+END;
+END IF;
+END SEND_EMAIL_FOR_REJECTED;
+-----------------------------------------------------------------------------------------------
+/*PROCEDURE FOR EMAIL NOTIFICATION WHEN FINANCE IS APPROVED*/
+PROCEDURE SEND_EMAIL_FOR_FINANCE_APPROVAL (
+	P_CLAIM_ID          NUMBER,
+	P_CLAIM_DATE        DATE
+)IS
+
+    l_id NUMBER;
+    lv_to_email VARCHAR2(5000);
+    lv_email VARCHAR2(500);
+    lv_created_by VARCHAR2(500);
+    lv_name VARCHAR2(500);
+    lv_query VARCHAR2(4000);
+    lv_claim_amount NUMBER;
+    lv_wf_id NUMBER;
+    lv_seq NUMBER;
+    lv_claim_id NUMBER;
+    lv_claim_date DATE;
+    lv_claim_number VARCHAR2(1000);
+    lv_org_id NUMBER;
+    lv_appr_lvl_hdr_id NUMBER;
+    LV_DIRECT_FLAG NUMBER;
+	LV_EMAIL_HEADER VARCHAR2(1000);
+	LV_EMAIL_BODY CLOB;
+	lv_wf_next_seq_no NUMBER;
+	lv_department VARCHAR2(200);
+	lv_salesmanager VARCHAR2(500);
+    LV_CLAIM_TYPES VARCHAR2(500);
+	LV_LOGIN_URL VARCHAR2(1000);
+	LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+    LV_ORDER_NUMBER  VARCHAR2(1000);
+	LV_EMAIL_CC      VARCHAR2(4000);
+	LV_TABLE_DATA VARCHAR2(10000) := '<tr>
+<td  style="border : 1px solid; text-align: center;"> #ORIGINAL_ORDER_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_TYPE#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON#</td>
+<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+<td  style="border : 1px solid; text-align: center;"> #ITEM_DESCRIPTION#</td>
+<td  style="border : 1px solid; text-align: center;"> #UNIT#</td>
+<td  style="border : 1px solid; text-align: center;"> #VARIETY#</td>
+<td  style="border : 1px solid; text-align: center;"> #REGION#</td>
+<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN#</td>
+<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_AMOUNT# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+<td  style="border : 1px solid; text-align: center;"> #NAME#</td>
+</tr>';
+LV_REPLACED_DATA VARCHAR2(30000);
+LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+BEGIN
+SELECT
+    ch.claim_number,
+    ch.claim_id,
+    wh.appr_lvl_hdr_id,
+    ch.org_id,
+    ch.wf_id,
+    ch.claim_amount,
+    ch.claim_date,
+	ch.wf_next_seq_no,
+	ch.department,
+    ch.salesmanager,
+    (SELECT LOOKUP_VALUE 
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = CH.CLAIM_TYPE) CLAIM_TYPE,
+	CH.SOLD_TO_CUSTOMER_NAME,
+	CH.ORDER_NUMBER
+INTO
+    lv_claim_number,
+    lv_claim_id,
+    lv_appr_lvl_hdr_id,
+    lv_org_id,
+    lv_wf_id,
+    lv_claim_amount,
+    lv_claim_date,
+	lv_wf_next_seq_no,
+	lv_department,
+	lv_salesmanager,
+    LV_CLAIM_TYPES,
+	LV_SOLD_TO_CUSTOMER_NAME,
+    LV_ORDER_NUMBER
+	
+FROM
+    xxtwc_claims_headers        ch,
+    xxtwc_claims_appr_wf_header wh
+WHERE
+        ch.wf_id = wh.wf_id
+    AND claim_id = P_CLAIM_ID;
+	
+	
+	
+	
+	
+	FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+    IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+	
+    BEGIN
+        SELECT
+        FIRSTNAME || ' ' || (CASE WHEN FIRSTNAME = LASTNAME THEN NULL ELSE LASTNAME END) NAME,
+        EMAIL_ID  
+        INTO 
+        LV_NAME,
+        LV_EMAIL
+        FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L
+        WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+        AND L.CLAIM_ID = LV_CLAIM_ID AND "ACTION" = 'Review Claim and Submit'
+        AND L.STATUS <> 0
+        AND D.ACTIVE_FLG = 'Y';
+    EXCEPTION
+        WHEN OTHERS THEN
+        LV_NAME := NULL;
+        LV_EMAIL := NULL;
+    END;
+	
+   BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'CLAIM_IS_FINAL_APPROVED';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL;
+END;
+
+BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+END;
+
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL); 
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_CLAIM_TYPES);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#NAME#',LV_NAME);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+IF  LV_EMAIL IS NOT NULL AND LV_EMAIL_BODY IS NOT NULL
+THEN
+l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => LV_EMAIL,
+		p_cc                 => LV_EMAIL_CC,
+        p_body               => LV_EMAIL_BODY,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER
+         );
+        APEX_MAIL.PUSH_QUEUE;
+    END IF;
+END SEND_EMAIL_FOR_FINANCE_APPROVAL;
+------------------------------------------------------------------------------------
+
+/*PROCEDURE FOR EMAIL NOTIFICATION WHEN CLAIM OWNER IS APPROVED*/
+
+PROCEDURE SEND_EMAIL_FOR_CLAIM_OWNER_APPROVAL (
+	P_CLAIM_ID          NUMBER,
+	P_CLAIM_DATE        DATE
+)IS
+
+    l_id NUMBER;
+    lv_to_email VARCHAR2(5000);
+    lv_email VARCHAR2(500);
+    lv_created_by VARCHAR2(500);
+    lv_name VARCHAR2(500);
+    lv_query VARCHAR2(4000);
+    lv_claim_amount NUMBER;
+    lv_wf_id NUMBER;
+    lv_seq NUMBER := 11;
+    lv_claim_id NUMBER;
+    lv_claim_date DATE;
+    lv_claim_number VARCHAR2(1000);
+    lv_org_id NUMBER;
+    lv_appr_lvl_hdr_id NUMBER;
+    LV_DIRECT_FLAG NUMBER;
+	LV_EMAIL_HEADER VARCHAR2(1000);
+	LV_EMAIL_BODY CLOB;
+	lv_wf_next_seq_no NUMBER;
+	lv_department VARCHAR2(200);
+	lv_salesmanager VARCHAR2(500);
+    LV_EMAIL_BODY_APP CLOB;
+    LV_CLAIM_TYPES VARCHAR2(1000);
+    LV_EMAIL_HEADER_APP VARCHAR2(1000);
+	LV_WAREHOUSE_CODE VARCHAR2(4000);
+	LV_LOGIN_URL VARCHAR2(1000);
+	LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+	LV_ORDER_NUMBER  VARCHAR2(1000);
+	LV_EMAIL_CC      VARCHAR2(4000);
+	LV_EMAIL_CC_APP  VARCHAR2(4000);
+	LV_TABLE_DATA VARCHAR2(10000) := '<tr>
+<td  style="border : 1px solid; text-align: center;"> #ORIGINAL_ORDER_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_TYPE#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON#</td>
+<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+<td  style="border : 1px solid; text-align: center;"> #ITEM_DESCRIPTION#</td>
+<td  style="border : 1px solid; text-align: center;"> #UNIT#</td>
+<td  style="border : 1px solid; text-align: center;"> #VARIETY#</td>
+<td  style="border : 1px solid; text-align: center;"> #REGION#</td>
+<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN#</td>
+<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_AMOUNT# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+<td  style="border : 1px solid; text-align: center;"> #NAME#</td>
+</tr>';
+	LV_REPLACED_DATA VARCHAR2(30000);
+    LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+	LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+BEGIN
+SELECT
+    ch.claim_number,
+    ch.claim_id,
+    wh.appr_lvl_hdr_id,
+    ch.org_id,
+    ch.wf_id,
+    ch.claim_amount,
+    ch.claim_date,
+	ch.wf_next_seq_no,
+	ch.department,
+    ch.salesmanager,
+	ch.WAREHOUSE_CODE,
+    (SELECT LOOKUP_VALUE 
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = CH.CLAIM_TYPE) CLAIM_TYPE,
+	ch.SOLD_TO_CUSTOMER_NAME,
+	ch.ORDER_NUMBER
+INTO
+    lv_claim_number,
+    lv_claim_id,
+    lv_appr_lvl_hdr_id,
+    lv_org_id,
+    lv_wf_id,
+    lv_claim_amount,
+    lv_claim_date,
+	lv_wf_next_seq_no,
+	lv_department,
+	lv_salesmanager,
+	LV_WAREHOUSE_CODE,
+    LV_CLAIM_TYPES,
+    LV_SOLD_TO_CUSTOMER_NAME,
+    LV_ORDER_NUMBER
+	
+FROM
+    xxtwc_claims_headers        ch,
+    xxtwc_claims_appr_wf_header wh
+WHERE
+        ch.wf_id = wh.wf_id
+    AND claim_id = P_CLAIM_ID;
+	
+	FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+    IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+	
+	
+	BEGIN
+	IF lv_wf_next_seq_no = 12
+	THEN
+	BEGIN
+	lv_query:=q'#SELECT LISTAGG (EMAIL_ID, ',') WITHIN GROUP (ORDER BY USER_ID )  
+from (
+SELECT DISTINCT LD.USER_ID, LD.EMAIL_ID
+FROM XXTWC_CLAIMS_APPR_GROUP_USERS GU, XXTWC_CLAIMS_USER_LOGIN_DETAILS LD, XXTWC_CLAIMS_USER_ORG_DETAILS OD
+WHERE GU.USER_ID = LD.USER_ID
+AND OD.USER_ID = LD.USER_ID 
+AND GU.STATUS = 1
+AND LD.ACTIVE_FLG = 'Y'
+AND LD.DEPT_CODE = '#'||lv_department|| q'#'
+AND #'||LV_ORG_ID|| q'# = OD.ORG_ID 
+AND EXISTS (SELECT result AS R FROM (select regexp_substr(OD.WAREHOUSE_CODE, '[^:]+', 1, level) result
+			from DUAL
+				connect by level <= length(regexp_replace(OD.WAREHOUSE_CODE, '[^:]+')) + 1)
+                WHERE RESULT = '#'||LV_WAREHOUSE_CODE|| q'#')
+AND GROUP_ID IN (
+SELECT DISTINCT result 
+FROM (
+WITH RWS AS (
+SELECT GROUP_ID 
+				--INTO 
+				--LV_GROUP_ID  
+                FROM
+	            (SELECT 
+				GROUP_ID 
+				FROM 
+				XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID 
+                AND ALH.APPR_LVL_HDR_ID = #'||LV_APPR_LVL_HDR_ID || q'#
+                AND ((#'||lv_claim_amount || q'# <= ALD.MAX_VALUE        
+				AND #'||lv_claim_amount || q'# >= (CASE WHEN ALD.ATTRIBUTE1 = 1 AND UPPER('#'||LV_DEPARTMENT|| q'#') IN ('OPERATIONS','QUALITY') THEN 0 ELSE ALD.MIN_VALUE END ))
+				OR #'||lv_claim_amount || q'# > ALD.MAX_VALUE)  
+				AND ALH.ORG_ID = #'||LV_ORG_ID || q'#
+				AND NOT EXISTS (SELECT 1 FROM XXTWC_CLAIMS_APPR_WF_ACT_LOG LO
+				WHERE LO.SEQ = #'||LV_SEQ || q'# AND LO.GROUP_ID = ALD.GROUP_ID AND LO.WF_ID = #'||LV_WF_ID || q'# AND LO.CLAIM_ID = #'||P_CLAIM_ID || q'#)
+				AND ALD.GROUP_ID  IS NOT NULL
+				ORDER BY ALD.MAX_VALUE ASC)
+				WHERE ROWNUM < 2
+)
+
+
+select regexp_substr(GROUP_ID, '[^:]+', 1, level) result
+			from RWS
+				connect by level <= length(regexp_replace(GROUP_ID, '[^:]+')) + 1)))#';
+				EXECUTE IMMEDIATE lv_query into LV_TO_EMAIL;				
+	--dbms_output.put_line(LV_TO_EMAIL);			
+EXCEPTION
+WHEN OTHERS THEN
+LV_TO_EMAIL := NULL;
+XXTWC_CLAIMS_GP_ERROR_PKG.GP_ERROR_LOG ('Error in Dynamic sql of Claim Owner Approve/Reject Email',
+                             SQLCODE,   
+							 SQLERRM, 
+							 V('APP_USER'),
+                             35,
+							 p_claim_id
+                             );
+END;
+
+BEGIN
+        SELECT
+        FIRSTNAME || ' ' || (CASE WHEN FIRSTNAME = LASTNAME THEN NULL ELSE LASTNAME END) NAME,
+        EMAIL_ID  
+        INTO 
+        LV_NAME,
+        LV_EMAIL
+        FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L
+        WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+        AND L.CLAIM_ID = LV_CLAIM_ID AND "ACTION" = 'Review Claim and Submit'
+        AND L.STATUS <> 0
+        AND D.ACTIVE_FLG = 'Y';
+    EXCEPTION
+        WHEN OTHERS THEN
+        LV_NAME := NULL;
+        LV_EMAIL := NULL;
+END;
+
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER_APP,
+LV_EMAIL_BODY_APP,
+LV_EMAIL_CC_APP
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'CLAIM_FOR_DEPARTMENT_APPROVAL';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY_APP := NULL;
+		LV_EMAIL_CC_APP := NULL; 
+END;
+
+BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+END;
+
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '\',NULL); 
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_CLAIM_TYPES);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+--LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY_APP := REPLACE(LV_EMAIL_BODY_APP, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER_APP := REPLACE(LV_EMAIL_HEADER_APP, LV_EMAIL_HEADER_APP, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER_APP);
+
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER_APP := REPLACE(LV_EMAIL_HEADER_APP, LV_EMAIL_HEADER_APP, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER_APP||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER_APP := REPLACE(LV_EMAIL_HEADER_APP, LV_EMAIL_HEADER_APP, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER_APP);
+END IF;
+
+IF  LV_TO_EMAIL IS NOT NULL AND LV_EMAIL_BODY_APP IS NOT NULL
+THEN
+l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => LV_TO_EMAIL,
+		p_cc                 => LV_EMAIL_CC_APP,
+        p_body               => LV_EMAIL_BODY_APP,
+		p_body_html          => LV_EMAIL_BODY_APP,
+        p_subj               => LV_EMAIL_HEADER_APP
+         );
+        APEX_MAIL.PUSH_QUEUE;
+    END IF;
+	ELSE
+	
+BEGIN
+
+        SELECT
+        FIRSTNAME || ' ' || (CASE WHEN FIRSTNAME = LASTNAME THEN NULL ELSE LASTNAME END) NAME,
+        EMAIL_ID  
+        INTO 
+        LV_NAME,
+        LV_EMAIL
+        FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L
+        WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+        AND L.CLAIM_ID = LV_CLAIM_ID AND "ACTION" = 'Review Claim and Submit'
+        AND L.STATUS <> 0
+        AND D.ACTIVE_FLG = 'Y';
+    EXCEPTION
+        WHEN OTHERS THEN
+        LV_NAME := NULL;
+        LV_EMAIL := NULL;
+
+END;
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y'
+    AND GU.GROUP_ID IN
+	(SELECT GROUP_ID
+				FROM XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID
+				AND ALH.HIERARCHY_NAME = 'Finance'
+				AND lv_claim_amount BETWEEN ALD.MIN_VALUE AND ALD.MAX_VALUE
+				AND ALH.ORG_ID = LV_ORG_ID
+				AND ALD.GROUP_ID  IS NOT NULL);
+
+	BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'SUBMITTED_CLAIM_FOR_FINANCE_APPROVAL';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL;
+END; 
+
+BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+END;
+
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL); 
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_CLAIM_TYPES);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+IF LV_EMAIL_BODY IS NOT NULL AND LV_TO_EMAIL IS NOT NULL
+THEN
+l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => LV_TO_EMAIL,
+		p_cc                 => LV_EMAIL_CC,
+        p_body               => LV_EMAIL_BODY,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER
+         );
+        APEX_MAIL.PUSH_QUEUE;
+
+END IF;
+	END IF;
+	END;
+END SEND_EMAIL_FOR_CLAIM_OWNER_APPROVAL;
+-------------------------------------------------------------------------------------------
+/*PROCEDURE FOR EMAIL NOTIFICATION WHEN CLAIM A- IS SUBMIT*/
+PROCEDURE SEND_EMAIL_FOR_SUBMIT_A_MINUS(
+	P_CLAIM_TYPES 		VARCHAR2,
+	P_CLAIM_ID          NUMBER
+)IS
+
+ l_id NUMBER;
+    lv_to_email VARCHAR2(5000) ;
+    lv_email VARCHAR2(500);
+    lv_created_by VARCHAR2(500);
+    lv_name VARCHAR2(500);
+    lv_query VARCHAR2(4000);
+    lv_claim_amount NUMBER;
+    lv_wf_id NUMBER;
+    lv_seq NUMBER;
+    lv_claim_id NUMBER;
+    lv_claim_date DATE;
+    lv_claim_number VARCHAR2(1000);
+    lv_org_id NUMBER;
+    lv_appr_lvl_hdr_id NUMBER;
+    LV_DIRECT_FLAG NUMBER;
+	LV_EMAIL_HEADER VARCHAR2(1000);
+	LV_EMAIL_BODY CLOB;
+	lv_wf_next_seq_no NUMBER;
+	lv_department VARCHAR2(200);
+	lv_salesmanager VARCHAR2(500);
+    LV_SALESMANAGER_ID NUMBER;
+    LV_LOOKUP_VALUE VARCHAR2(500);
+	LV_LOGIN_URL    VARCHAR2(1000);
+	LV_TO_EMAIL_DEPT VARCHAR2(5000);
+	LV_TO_EMAIL_FINANCE VARCHAR2(5000);
+	LV_TO_EMAIL_SALE   VARCHAR2(5000);
+    LV_WAREHOUSE_CODE VARCHAR2(5000);
+	LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+	LV_ORDER_NUMBER  VARCHAR2(1000);
+	LV_EMAIL_CC    VARCHAR2(4000);
+	LV_TABLE_DATA VARCHAR2(10000) := '<tr>
+<td  style="border : 1px solid; text-align: center;"> #ORIGINAL_ORDER_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_TYPE#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON#</td>
+<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+<td  style="border : 1px solid; text-align: center;"> #ITEM_DESCRIPTION#</td>
+<td  style="border : 1px solid; text-align: center;"> #UNIT#</td>
+<td  style="border : 1px solid; text-align: center;"> #VARIETY#</td>
+<td  style="border : 1px solid; text-align: center;"> #REGION#</td>
+<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN#</td>
+<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_AMOUNT# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+<td  style="border : 1px solid; text-align: center;"> #NAME#</td>
+</tr>';
+LV_REPLACED_DATA VARCHAR2(30000); 
+LV_CLAIM_TYPES VARCHAR2(500);
+--LV_SALES_PERSON_EMAIL VARCHAR2(1000);
+--LV_SALES_PERSON_USER_ID NUMBER;
+LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+	BEGIN
+   SELECT 
+    ch.claim_number,
+    ch.claim_id,
+    wh.appr_lvl_hdr_id,
+    ch.org_id,
+    ch.wf_id,
+    ch.claim_amount,
+    ch.claim_date,
+	ch.wf_next_seq_no,
+	ch.department,
+    ch.salesmanager,
+    ch.WAREHOUSE_CODE,
+	ch.SOLD_TO_CUSTOMER_NAME,
+	ch.ORDER_NUMBER,
+    (SELECT LOOKUP_VALUE 
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = CH.CLAIM_TYPE) CLAIM_TYPE
+    /*,(SELECT 
+	UPPER(EMAIL_ADDRESS) 
+    FROM fusion.jtf_rs_salesreps jrs,
+        fusion.hz_parties hp_sales
+    WHERE jrs.resource_id = hp_sales.party_id  
+    AND jrs.status ='A'
+    AND hp_sales.status ='A'
+    AND SYSDATE BETWEEN jrs.start_date_active and jrs.end_date_active
+    and hp_sales.party_id = CH.SALES_PERSON_ID) SALES_PERSON_EMAIL*/
+INTO
+    lv_claim_number,
+    lv_claim_id,
+    lv_appr_lvl_hdr_id,
+    lv_org_id,
+    lv_wf_id,
+    lv_claim_amount,
+    lv_claim_date,
+	lv_wf_next_seq_no,
+	lv_department,
+	lv_salesmanager,
+    LV_WAREHOUSE_CODE,
+	LV_SOLD_TO_CUSTOMER_NAME,
+	LV_ORDER_NUMBER,
+    LV_CLAIM_TYPES
+	--,LV_SALES_PERSON_EMAIL
+FROM
+    xxtwc_claims_headers        ch,
+    xxtwc_claims_appr_wf_header wh
+WHERE
+        ch.wf_id = wh.wf_id
+    AND claim_id = P_CLAIM_ID;
+    
+    FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+    IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+    
+    SELECT SEQ 
+   INTO LV_SEQ 
+   FROM XXTWC_CLAIMS_APPR_WF_DETAILS WF, XXTWC_CLAIMS_APPR_WF_HEADER WH
+	WHERE WF.WF_ID = WH.WF_ID
+	AND WF.WF_ID = LV_WF_ID
+	AND UPPER(STEP_NAME) = UPPER('Departmental Hierarchy Approval');
+	
+	BEGIN
+    IF lv_wf_next_seq_no = 11
+	THEN
+	BEGIN
+    SELECT USER_ID
+    INTO LV_SALESMANAGER_ID
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS
+    WHERE UPPER(EMAIL_ID) = UPPER(lv_salesmanager)
+    AND ACTIVE_FLG = 'Y';
+    EXCEPTION
+    WHEN OTHERS
+    THEN LV_SALESMANAGER_ID := NULL;
+    END;
+    
+    /*BEGIN
+	SELECT USER_ID
+	INTO LV_SALES_PERSON_USER_ID 
+	FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS
+	WHERE UPPER(EMAIL_ID) = LV_SALES_PERSON_EMAIL
+	AND ACTIVE_FLG = 'Y';
+	EXCEPTION WHEN OTHERS THEN 
+	LV_SALES_PERSON_USER_ID := NULL;
+    END;*/	
+    
+	IF LV_SALESMANAGER_ID IS NOT NULL
+	THEN LV_TO_EMAIL_SALE := lv_salesmanager;
+    /*ELSIF LV_SALES_PERSON_USER_ID IS NOT NULL
+	THEN LV_TO_EMAIL_SALE := LV_SALES_PERSON_EMAIL;*/
+	ELSE
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL_SALE
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU, XXTWC_CLAIMS_APPR_GROUPS G
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.GROUP_ID = G.GROUP_ID
+    AND G.GROUP_NAME = 'Claim Owner'
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y';
+	END IF;
+	
+
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL_FINANCE
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y'
+    AND GU.GROUP_ID IN
+	(SELECT GROUP_ID
+				FROM XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID
+				AND ALH.HIERARCHY_NAME = 'Finance'
+				AND lv_claim_amount BETWEEN ALD.MIN_VALUE AND ALD.MAX_VALUE
+				AND ALH.ORG_ID = LV_ORG_ID
+				AND ALD.GROUP_ID  IS NOT NULL);
+	
+	
+	
+	
+	BEGIN
+	lv_query:=q'#SELECT LISTAGG (EMAIL_ID, ',') WITHIN GROUP (ORDER BY USER_ID )  
+from (
+SELECT DISTINCT LD.USER_ID, LD.EMAIL_ID
+FROM XXTWC_CLAIMS_APPR_GROUP_USERS GU, XXTWC_CLAIMS_USER_LOGIN_DETAILS LD, XXTWC_CLAIMS_USER_ORG_DETAILS OD
+WHERE GU.USER_ID = LD.USER_ID 
+AND OD.USER_ID = LD.USER_ID
+AND GU.STATUS = 1
+AND LD.ACTIVE_FLG = 'Y'
+AND LD.DEPT_CODE IN (SELECT CH.DEPARTMENT FROM XXTWC_CLAIMS_HEADERS CH WHERE CH.CLAIM_ID = #'||LV_CLAIM_ID|| q'#)
+AND #'||LV_ORG_ID|| q'# = OD.ORG_ID 
+AND EXISTS (SELECT result AS R FROM (select regexp_substr(OD.WAREHOUSE_CODE, '[^:]+', 1, level) result
+			from DUAL
+				connect by level <= length(regexp_replace(OD.WAREHOUSE_CODE, '[^:]+')) + 1)
+                WHERE RESULT = '#'||LV_WAREHOUSE_CODE|| q'#')
+AND GROUP_ID IN (
+SELECT DISTINCT result 
+FROM (
+WITH RWS AS (
+SELECT GROUP_ID 
+				--INTO 
+				--LV_GROUP_ID  
+                FROM
+	            (SELECT 
+				GROUP_ID 
+				FROM 
+				XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID 
+                AND ALH.APPR_LVL_HDR_ID = #'||LV_APPR_LVL_HDR_ID || q'#
+                AND ((#'||lv_claim_amount || q'# <= ALD.MAX_VALUE        
+				AND #'||lv_claim_amount || q'# >= (CASE WHEN ALD.ATTRIBUTE1 = 1 AND UPPER('#'||LV_DEPARTMENT|| q'#') IN ('OPERATIONS','QUALITY') THEN 0 ELSE ALD.MIN_VALUE END ))
+				OR #'||lv_claim_amount || q'# > ALD.MAX_VALUE)  
+				AND ALH.ORG_ID = #'||LV_ORG_ID || q'#
+				AND NOT EXISTS (SELECT 1 FROM XXTWC_CLAIMS_APPR_WF_ACT_LOG LO
+				WHERE LO.SEQ = #'||LV_SEQ || q'# AND LO.GROUP_ID = ALD.GROUP_ID AND LO.WF_ID = #'||LV_WF_ID || q'# AND LO.CLAIM_ID = #'||LV_CLAIM_ID || q'#)
+				AND ALD.GROUP_ID  IS NOT NULL
+				ORDER BY ALD.MAX_VALUE ASC)
+				--WHERE ROWNUM < 2
+)
+
+
+select regexp_substr(GROUP_ID, '[^:]+', 1, level) result
+			from RWS
+				connect by level <= length(regexp_replace(GROUP_ID, '[^:]+')) + 1)))#';
+ 
+   EXECUTE IMMEDIATE lv_query into LV_TO_EMAIL_DEPT;				
+	--dbms_output.put_line(LV_TO_EMAIL);	
+EXCEPTION
+  WHEN OTHERS THEN
+  LV_TO_EMAIL_DEPT := NULL;
+ END;
+	
+	
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'SUBMITTED_CLAIM_FOR_A-CUSTOMER_CONCERN';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL;
+END;
+    
+	ELSE
+	
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL_FINANCE
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y'
+    AND GU.GROUP_ID IN
+	(SELECT GROUP_ID
+				FROM XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID
+				AND ALH.HIERARCHY_NAME = 'Finance'
+				AND lv_claim_amount BETWEEN ALD.MIN_VALUE AND ALD.MAX_VALUE
+				AND ALH.ORG_ID = LV_ORG_ID
+				AND ALD.GROUP_ID  IS NOT NULL);
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'SUBMITTED_CLAIM_FOR_A-CUSTOMER_CONCERN';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL;
+END;                
+                
+	END IF;
+	END;
+
+	
+
+    BEGIN
+        SELECT
+        FIRSTNAME || ' ' || (CASE WHEN FIRSTNAME = LASTNAME THEN NULL ELSE LASTNAME END) NAME,
+        EMAIL_ID  
+        INTO 
+        LV_NAME,
+        LV_EMAIL
+        FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L
+        WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+        AND L.CLAIM_ID = LV_CLAIM_ID AND "ACTION" = 'Review Claim and Submit'
+        AND L.STATUS <> 0
+        AND D.ACTIVE_FLG = 'Y';
+    EXCEPTION
+        WHEN OTHERS THEN
+        LV_NAME := NULL;
+        LV_EMAIL := NULL;
+    END;
+    
+    BEGIN
+    SELECT LOOKUP_VALUE 
+    INTO LV_LOOKUP_VALUE
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = P_CLAIM_TYPES;
+    END;
+	
+	BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+	END;
+    
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_CLAIM_TYPES);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+ --lv_to_email := LV_TO_EMAIL_DEPT||','||LV_TO_EMAIL_FINANCE||','||LV_TO_EMAIL_SALE;
+ lv_to_email := LV_TO_EMAIL_SALE||',' ||LV_TO_EMAIL_DEPT||',' ||LV_TO_EMAIL_FINANCE;
+  
+
+ IF LV_EMAIL_BODY IS NOT NULL AND LV_TO_EMAIL IS NOT NULL
+ THEN
+    BEGIN
+    l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => lv_to_email,
+		p_cc                 => LV_EMAIL_CC,
+        p_body               => LV_EMAIL_BODY,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER
+        );
+        APEX_MAIL.PUSH_QUEUE;
+END;
+END IF;
+END SEND_EMAIL_FOR_SUBMIT_A_MINUS;
+
+----------------------------------------------------------------------------------
+/*PROCEDURE FOR EMAIL FORGOT PASSWORD*/
+
+PROCEDURE SEND_EMAIL_FOR_FORGOT_PASSWORD (
+	P_EMAIL_ID VARCHAR2
+)IS
+LV_EMAIL VARCHAR2(500);
+LV_USER_NAME VARCHAR2(500);
+LV_PWD VARCHAR2 (100);
+LV_EMAIL_HEADER VARCHAR2(4000);
+LV_EMAIL_BODY VARCHAR2(4000);
+LV_LOGIN_URL VARCHAR2(1000);
+LV_GET_PWD VARCHAR2(1000);
+BEGIN
+	BEGIN
+		SELECT FIRSTNAME INTO LV_USER_NAME 
+		FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS 
+		WHERE UPPER(EMAIL_ID) = UPPER(P_EMAIL_ID)
+        AND ACTIVE_FLG = 'Y';
+		EXCEPTION WHEN OTHERS THEN
+		LV_USER_NAME := NULL;
+	END;
+	SELECT dbms_random.string('P', 6)  INTO LV_PWD FROM dual;
+    select xxtwc_claims_user_registration_pkg.get_hash (p_username   => upper(P_EMAIL_ID),
+                                      P_PASSWORD   => LV_PWD) into LV_GET_PWD from dual;
+	--:P41_PASSWORD := LV_PWD;
+	UPDATE XXTWC_CLAIMS_USER_LOGIN_DETAILS 
+	SET PASSWORD =  LV_GET_PWD,
+        is_password_change = 'Y'
+	WHERE UPPER(EMAIL_ID) = UPPER(P_EMAIL_ID)
+    AND ACTIVE_FLG = 'Y';
+
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'PASSWORD_CHANGED_EMAIL';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+END;            
+
+
+BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL_LOGIN';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/login';
+	END;
+
+
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL);
+
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#FIRSTNAME#',LV_USER_NAME);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#PASSWORD#',LV_PWD);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+
+BEGIN
+ apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => P_EMAIL_ID,
+        p_body               => LV_EMAIL_BODY,
+        p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER );
+		
+		APEX_MAIL.PUSH_QUEUE;
+END;
+--END IF;
+END SEND_EMAIL_FOR_FORGOT_PASSWORD;
+
+--------------------------------
+PROCEDURE SEND_EMAIL_FOR_DRAFT_CLAIM (
+	P_CLAIM_ID          NUMBER
+)IS
+
+    l_id NUMBER;
+    lv_to_email VARCHAR2(5000);
+    lv_seq NUMBER;
+    lv_claim_date DATE;
+    lv_claim_number VARCHAR2(1000);
+	LV_EMAIL_HEADER VARCHAR2(1000);
+	LV_EMAIL_BODY CLOB;
+	lv_department VARCHAR2(200);
+	LV_LOGIN_URL    VARCHAR2(1000);
+	LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+	LV_ORDER_NUMBER  VARCHAR2(1000);
+	LV_EMAIL_CC VARCHAR2(4000);
+	LV_SHIP_TO_SITE VARCHAR2(100);
+	LV_WAREHOUSE_CODE VARCHAR2(240);
+	LV_CLAIM_REASON_CODE VARCHAR2(100);
+	LV_SHIP_DATE DATE;
+	LV_TABLE_DATA VARCHAR2(2000) := '<tr>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #ORDER_NUMBER#</td>
+<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+<td  style="border : 1px solid; text-align: center;"> #SHIP_TO_SITE# </td>
+<td  style="border : 1px solid; text-align: center;"> #SHIP_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #WAREHOUSE_CODE# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON_CODE# </td>
+<td  style="border : 1px solid; text-align: center;"> #UNIT# </td>
+<td  style="border : 1px solid; text-align: center;"> #VARIETY# </td>
+<td  style="border : 1px solid; text-align: center;"> #REGION# </td>
+<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN# </td>
+<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY# </td>
+<td  style="border : 1px solid; text-align: center;"> #INVENTORY_ITEM_NAME# </td>
+<td  style="border : 1px solid; text-align: center;"> #INVENTORY_ITEM_DESC# </td>
+<td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+</tr>';
+LV_REPLACED_DATA VARCHAR2(30000);
+LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+	
+BEGIN
+SELECT
+    claim_number,
+    claim_date,
+	SOLD_TO_CUSTOMER_NAME,
+	ORDER_NUMBER,
+	SHIP_TO_SITE,
+	WAREHOUSE_CODE
+	
+INTO
+    lv_claim_number,
+    lv_claim_date,
+	LV_SOLD_TO_CUSTOMER_NAME,
+	LV_ORDER_NUMBER,
+	LV_SHIP_TO_SITE,
+	LV_WAREHOUSE_CODE
+	
+FROM
+    xxtwc_claims_headers   
+WHERE claim_id = P_CLAIM_ID;
+	
+	
+    FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON_CODE#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#INVENTORY_ITEM_NAME#',I.INVENTORY_ITEM_NAME); --
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#INVENTORY_ITEM_DESC#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+	IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+	
+	
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'CLAIM_IN_DRAFT';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL; 
+END;
+    
+	
+    
+    BEGIN
+    SELECT LOOKUP_VALUE 
+    INTO LV_TO_EMAIL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'DISTRIBUTION_GROUP' 
+    AND STATUS = 1
+    AND LOOKUP_NAME = LV_WAREHOUSE_CODE; 
+	EXCEPTION
+        WHEN OTHERS THEN
+        LV_TO_EMAIL := NULL; 
+    END;
+	
+	BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+	END;
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_TO_SITE#', LV_SHIP_TO_SITE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#WAREHOUSE_CODE#', LV_WAREHOUSE_CODE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+
+ IF LV_EMAIL_BODY IS NOT NULL AND LV_TO_EMAIL IS NOT NULL
+ THEN
+    BEGIN
+    l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => LV_TO_EMAIL,
+        p_body               => LV_EMAIL_BODY,
+		p_cc                 => LV_EMAIL_CC,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER
+        );
+        APEX_MAIL.PUSH_QUEUE;
+END;
+END IF;
+END SEND_EMAIL_FOR_DRAFT_CLAIM;
+---------------------------------------------------------
+
+
+PROCEDURE SEND_EMAIL_REMINDER (
+	P_CLAIM_ID          NUMBER,
+	P_EMAIL_ID          VARCHAR2
+)IS
+    l_id NUMBER;
+	LV_EMAIL_HEADER VARCHAR2(1000);
+	LV_EMAIL_BODY CLOB;
+	LV_EMAIL_CC     VARCHAR2(4000);
+	LV_NAME         VARCHAR2(500);
+	LV_EMAIL        VARCHAR2(500);
+	LV_LOGIN_URL    VARCHAR2(1000);
+	lv_claim_number VARCHAR2(1000);
+	lv_claim_amount NUMBER;
+	lv_claim_date   DATE;
+	LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+	LV_ORDER_NUMBER  VARCHAR2(1000);
+	
+	LV_TABLE_DATA   VARCHAR2(10000) := '<tr>
+	<td  style="border : 1px solid; text-align: center;"> #ORIGINAL_ORDER_NUMBER# </td>
+	<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+	<td  style="border : 1px solid; text-align: center;"> #CLAIM_TYPE#</td>
+	<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON#</td>
+	<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+	<td  style="border : 1px solid; text-align: center;"> #ITEM_DESCRIPTION#</td>
+	<td  style="border : 1px solid; text-align: center;"> #UNIT#</td>
+	<td  style="border : 1px solid; text-align: center;"> #VARIETY#</td>
+	<td  style="border : 1px solid; text-align: center;"> #REGION#</td>
+	<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN#</td>
+	<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY#</td>
+	<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY#</td>
+	<td  style="border : 1px solid; text-align: center;"> #CLAIM_AMOUNT# </td>
+	<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+    <td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+    <td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+	<td  style="border : 1px solid; text-align: center;"> #NAME#</td>
+	</tr>';
+	LV_REPLACED_DATA VARCHAR2(30000);
+	LV_LOOKUP_VALUE  VARCHAR2(500);
+    lv_claim_id NUMBER;
+    lv_appr_lvl_hdr_id NUMBER;
+    lv_org_id NUMBER;
+    lv_wf_id NUMBER;
+    lv_wf_next_seq_no NUMBER;
+    lv_department  VARCHAR2(10000);
+    lv_salesmanager VARCHAR2(10000);
+    LV_WAREHOUSE_CODE  VARCHAR2(1000);
+    LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+	LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+	BEGIN
+   SELECT 
+    ch.claim_number,
+    ch.claim_id,
+    wh.appr_lvl_hdr_id,
+    ch.org_id,
+    ch.wf_id,
+    ch.claim_amount,
+    ch.claim_date,
+	ch.wf_next_seq_no,
+	ch.department,
+    ch.salesmanager,
+    ch.WAREHOUSE_CODE,
+	ch.SOLD_TO_CUSTOMER_NAME,
+	ch.ORDER_NUMBER,
+    (SELECT LOOKUP_VALUE 
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = CH.CLAIM_TYPE) CLAIM_TYPE
+INTO
+    lv_claim_number,
+    lv_claim_id,
+    lv_appr_lvl_hdr_id,
+    lv_org_id,
+    lv_wf_id,
+    lv_claim_amount,
+    lv_claim_date,
+	lv_wf_next_seq_no,
+	lv_department,
+	lv_salesmanager,
+    LV_WAREHOUSE_CODE,
+	LV_SOLD_TO_CUSTOMER_NAME,
+	LV_ORDER_NUMBER,
+    LV_LOOKUP_VALUE
+	
+FROM
+    xxtwc_claims_headers        ch,
+    xxtwc_claims_appr_wf_header wh
+WHERE
+        ch.wf_id = wh.wf_id
+    AND claim_id = P_CLAIM_ID;
+
+	FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+    IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+	BEGIN
+        SELECT
+        FIRSTNAME || ' ' || (CASE WHEN FIRSTNAME = LASTNAME THEN NULL ELSE LASTNAME END) NAME,
+        EMAIL_ID  
+        INTO 
+        LV_NAME,
+        LV_EMAIL
+        FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L
+        WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+        AND L.CLAIM_ID = LV_CLAIM_ID AND "ACTION" = 'Review Claim and Submit'
+        AND L.STATUS <> 0
+        AND D.ACTIVE_FLG = 'Y';
+    EXCEPTION
+        WHEN OTHERS THEN
+        LV_NAME := NULL;
+        LV_EMAIL := NULL;
+    END;
+	BEGIN
+	SELECT 
+	EMAIL_HEADER,
+	EMAIL_BODY,
+	EMAIL_CC
+	INTO
+	LV_EMAIL_HEADER,
+	LV_EMAIL_BODY,
+	LV_EMAIL_CC
+	FROM 
+	XXTWC_CLAIMS_EMAIL_TEMPLATES
+	WHERE TEMP_CODE = 'EMAIL_NOTIFICATION_FOR_APPROVAL';
+	EXCEPTION
+			WHEN OTHERS THEN
+			LV_EMAIL_HEADER := NULL; 
+			LV_EMAIL_BODY := NULL; 
+			LV_EMAIL_CC := NULL;
+	END;                
+    BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+	END;	
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_LOOKUP_VALUE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+
+ IF LV_EMAIL_BODY IS NOT NULL
+ THEN
+    BEGIN
+    l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => REPLACE(P_EMAIL_ID, '~',','),
+        p_body               => LV_EMAIL_BODY,
+		p_cc                 => LV_EMAIL_CC,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER
+        );
+        APEX_MAIL.PUSH_QUEUE;
+        
+END;
+END IF;
+EXCEPTION WHEN OTHERS
+          THEN 
+ XXTWC_CLAIMS_GP_ERROR_PKG.GP_ERROR_LOG ( 'Email Reminder',
+                                             SQLCODE,
+                                             SQLERRM, 
+                                            V('APP_USER'),
+                                             42,
+                                            P_CLAIM_ID
+                                    );
+END SEND_EMAIL_REMINDER;
+
+
+
+PROCEDURE SEND_EMAIL_FOR_SUBMIT_RETURN_INVENTORY(
+	P_CLAIM_TYPES 		VARCHAR2,
+	P_CLAIM_ID          NUMBER
+)IS
+
+ l_id NUMBER;
+    lv_to_email VARCHAR2(5000) ;
+    lv_email VARCHAR2(500);
+    lv_created_by VARCHAR2(500);
+    lv_name VARCHAR2(500);
+    lv_query VARCHAR2(4000);
+    lv_claim_amount NUMBER;
+    lv_wf_id NUMBER;
+    lv_seq NUMBER;
+    lv_claim_id NUMBER;
+    lv_claim_date DATE;
+    lv_claim_number VARCHAR2(1000);
+    lv_org_id NUMBER;
+    lv_appr_lvl_hdr_id NUMBER;
+    LV_DIRECT_FLAG NUMBER;
+	LV_EMAIL_HEADER VARCHAR2(1000);
+	LV_EMAIL_BODY CLOB;
+	lv_wf_next_seq_no NUMBER;
+	lv_department VARCHAR2(200);
+	lv_salesmanager VARCHAR2(500);
+    LV_SALESMANAGER_ID NUMBER;
+    LV_LOOKUP_VALUE VARCHAR2(500);
+	LV_LOGIN_URL    VARCHAR2(1000);
+	LV_TO_EMAIL_DEPT VARCHAR2(5000);
+	LV_TO_EMAIL_FINANCE VARCHAR2(5000);
+	LV_TO_EMAIL_SALE   VARCHAR2(5000);
+    LV_WAREHOUSE_CODE VARCHAR2(5000);
+	LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+	LV_ORDER_NUMBER  VARCHAR2(1000);
+	LV_EMAIL_CC    VARCHAR2(4000);
+	LV_TABLE_DATA VARCHAR2(10000) := '<tr>
+<td  style="border : 1px solid; text-align: center;"> #ORIGINAL_ORDER_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_TYPE#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON#</td>
+<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+<td  style="border : 1px solid; text-align: center;"> #ITEM_DESCRIPTION#</td>
+<td  style="border : 1px solid; text-align: center;"> #UNIT#</td>
+<td  style="border : 1px solid; text-align: center;"> #VARIETY#</td>
+<td  style="border : 1px solid; text-align: center;"> #REGION#</td>
+<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN#</td>
+<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_AMOUNT# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+    <td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+<td  style="border : 1px solid; text-align: center;"> #NAME#</td>
+</tr>';
+LV_REPLACED_DATA VARCHAR2(30000); 
+LV_CLAIM_TYPES VARCHAR2(500);
+LV_SALES_PERSON_EMAIL VARCHAR2(1000);
+LV_SALES_PERSON_USER_ID NUMBER;
+lv_max_value NUMBER;
+LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+	BEGIN
+   SELECT 
+    ch.claim_number,
+    ch.claim_id,
+    wh.appr_lvl_hdr_id,
+    ch.org_id,
+    ch.wf_id,
+    ch.claim_amount,
+    ch.claim_date,
+	ch.wf_next_seq_no,
+	ch.department,
+    ch.salesmanager,
+    ch.WAREHOUSE_CODE,
+	ch.SOLD_TO_CUSTOMER_NAME,
+	ch.ORDER_NUMBER,
+    (SELECT LOOKUP_VALUE 
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = CH.CLAIM_TYPE) CLAIM_TYPE
+    ,(SELECT 
+	UPPER(EMAIL_ADDRESS) 
+    FROM fusion.jtf_rs_salesreps jrs,
+        fusion.hz_parties hp_sales
+    WHERE jrs.resource_id = hp_sales.party_id  
+    AND jrs.status ='A'
+    AND hp_sales.status ='A'
+    AND SYSDATE BETWEEN jrs.start_date_active and jrs.end_date_active
+    and hp_sales.party_id = CH.SALES_PERSON_ID) SALES_PERSON_EMAIL
+INTO
+    lv_claim_number,
+    lv_claim_id,
+    lv_appr_lvl_hdr_id,
+    lv_org_id,
+    lv_wf_id,
+    lv_claim_amount,
+    lv_claim_date,
+	lv_wf_next_seq_no,
+	lv_department,
+	lv_salesmanager,
+    LV_WAREHOUSE_CODE,
+	LV_SOLD_TO_CUSTOMER_NAME,
+	LV_ORDER_NUMBER,
+    LV_CLAIM_TYPES
+	,LV_SALES_PERSON_EMAIL
+FROM
+    xxtwc_claims_headers        ch,
+    xxtwc_claims_appr_wf_header wh
+WHERE
+        ch.wf_id = wh.wf_id
+    AND claim_id = P_CLAIM_ID;
+    
+    FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+    IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+    
+    SELECT SEQ 
+   INTO LV_SEQ 
+   FROM XXTWC_CLAIMS_APPR_WF_DETAILS WF, XXTWC_CLAIMS_APPR_WF_HEADER WH
+	WHERE WF.WF_ID = WH.WF_ID
+	AND WF.WF_ID = LV_WF_ID
+	AND UPPER(STEP_NAME) = UPPER('Departmental Hierarchy Approval');
+	
+	BEGIN
+	BEGIN
+    SELECT USER_ID
+    INTO LV_SALESMANAGER_ID
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS
+    WHERE UPPER(EMAIL_ID) = UPPER(lv_salesmanager)
+    AND ACTIVE_FLG = 'Y';
+    EXCEPTION
+    WHEN OTHERS
+    THEN LV_SALESMANAGER_ID := NULL;
+    END;
+    
+    BEGIN
+	SELECT USER_ID
+	INTO LV_SALES_PERSON_USER_ID 
+	FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS
+	WHERE UPPER(EMAIL_ID) = LV_SALES_PERSON_EMAIL
+	AND ACTIVE_FLG = 'Y';
+	EXCEPTION WHEN OTHERS THEN 
+	LV_SALES_PERSON_USER_ID := NULL;
+    END;	
+    
+    BEGIN
+            SELECT
+                ald.max_value
+            INTO lv_max_value
+            FROM
+                xxtwc_claims_appr_lvl_dtl ald,
+                xxtwc_claims_appr_lvl_hdr alh
+            WHERE
+                    ald.appr_lvl_hdr_id = alh.appr_lvl_hdr_id
+                AND alh.appr_lvl_hdr_id = lv_appr_lvl_hdr_id
+                AND nvl(ald.min_value, 0) = 0
+                AND alh.org_id = lv_org_id; 
+
+        EXCEPTION
+            WHEN OTHERS THEN
+                lv_max_value := 0;
+        END;
+		
+         IF lv_max_value < lv_claim_amount THEN
+    
+	IF LV_SALESMANAGER_ID IS NOT NULL
+	THEN LV_TO_EMAIL_SALE := lv_salesmanager;
+    ELSIF LV_SALES_PERSON_USER_ID IS NOT NULL
+	THEN LV_TO_EMAIL_SALE := LV_SALES_PERSON_EMAIL;
+	ELSE
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL_SALE
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU, XXTWC_CLAIMS_APPR_GROUPS G
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.GROUP_ID = G.GROUP_ID
+    AND G.GROUP_NAME = 'Claim Owner'
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y';
+	END IF;
+	END IF;
+    
+
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL_FINANCE
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y'
+    AND GU.GROUP_ID IN
+	(SELECT GROUP_ID
+				FROM XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID
+				AND ALH.HIERARCHY_NAME = 'Finance'
+				AND lv_claim_amount BETWEEN ALD.MIN_VALUE AND ALD.MAX_VALUE
+				AND ALH.ORG_ID = LV_ORG_ID
+				AND ALD.GROUP_ID  IS NOT NULL);
+	
+	
+	
+	
+	BEGIN
+	lv_query:=q'#SELECT LISTAGG (EMAIL_ID, ',') WITHIN GROUP (ORDER BY USER_ID )  
+from (
+SELECT DISTINCT LD.USER_ID, LD.EMAIL_ID
+FROM XXTWC_CLAIMS_APPR_GROUP_USERS GU, XXTWC_CLAIMS_USER_LOGIN_DETAILS LD, XXTWC_CLAIMS_USER_ORG_DETAILS OD
+WHERE GU.USER_ID = LD.USER_ID 
+AND OD.USER_ID = LD.USER_ID
+AND GU.STATUS = 1
+AND LD.ACTIVE_FLG = 'Y'
+AND LD.DEPT_CODE IN (SELECT CH.DEPARTMENT FROM XXTWC_CLAIMS_HEADERS CH WHERE CH.CLAIM_ID = #'||LV_CLAIM_ID|| q'#)
+AND #'||LV_ORG_ID|| q'# = OD.ORG_ID 
+AND EXISTS (SELECT result AS R FROM (select regexp_substr(OD.WAREHOUSE_CODE, '[^:]+', 1, level) result
+			from DUAL
+				connect by level <= length(regexp_replace(OD.WAREHOUSE_CODE, '[^:]+')) + 1)
+                WHERE RESULT = '#'||LV_WAREHOUSE_CODE|| q'#')
+AND GROUP_ID IN (
+SELECT DISTINCT result 
+FROM (
+WITH RWS AS (
+SELECT GROUP_ID 
+				--INTO 
+				--LV_GROUP_ID  
+                FROM
+	            (SELECT 
+				GROUP_ID 
+				FROM 
+				XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID 
+                AND ALH.APPR_LVL_HDR_ID = #'||LV_APPR_LVL_HDR_ID || q'#
+                AND ((#'||lv_claim_amount || q'# <= ALD.MAX_VALUE        
+				AND #'||lv_claim_amount || q'# >= (CASE WHEN ALD.ATTRIBUTE1 = 1 AND UPPER('#'||LV_DEPARTMENT|| q'#') IN ('OPERATIONS','QUALITY') THEN 0 ELSE ALD.MIN_VALUE END ))
+				OR #'||lv_claim_amount || q'# > ALD.MAX_VALUE)  
+				AND ALH.ORG_ID = #'||LV_ORG_ID || q'#
+				AND NOT EXISTS (SELECT 1 FROM XXTWC_CLAIMS_APPR_WF_ACT_LOG LO
+				WHERE LO.SEQ = #'||LV_SEQ || q'# AND LO.GROUP_ID = ALD.GROUP_ID AND LO.WF_ID = #'||LV_WF_ID || q'# AND LO.CLAIM_ID = #'||LV_CLAIM_ID || q'#)
+				AND ALD.GROUP_ID  IS NOT NULL
+				ORDER BY ALD.MAX_VALUE ASC)
+				--WHERE ROWNUM < 2
+)
+
+
+select regexp_substr(GROUP_ID, '[^:]+', 1, level) result
+			from RWS
+				connect by level <= length(regexp_replace(GROUP_ID, '[^:]+')) + 1)))#';
+ 
+   EXECUTE IMMEDIATE lv_query into LV_TO_EMAIL_DEPT;				
+	--dbms_output.put_line(LV_TO_EMAIL);	
+EXCEPTION
+  WHEN OTHERS THEN
+  LV_TO_EMAIL_DEPT := NULL;
+ END;
+	
+	
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'CLAIM_IS_FINAL_APPROVED';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL;
+END;
+    
+
+	END;
+
+	
+
+    BEGIN
+        SELECT
+        FIRSTNAME || ' ' || (CASE WHEN FIRSTNAME = LASTNAME THEN NULL ELSE LASTNAME END) NAME,
+        EMAIL_ID  
+        INTO 
+        LV_NAME,
+        LV_EMAIL
+        FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L
+        WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+        AND L.CLAIM_ID = LV_CLAIM_ID AND "ACTION" = 'Review Claim and Submit'
+        AND L.STATUS <> 0
+        AND D.ACTIVE_FLG = 'Y';
+    EXCEPTION
+        WHEN OTHERS THEN
+        LV_NAME := NULL;
+        LV_EMAIL := NULL;
+    END;
+    
+    BEGIN
+    SELECT LOOKUP_VALUE 
+    INTO LV_LOOKUP_VALUE
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = P_CLAIM_TYPES;
+    END;
+	
+	BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+	END;
+    
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_CLAIM_TYPES);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#NAME#',LV_NAME);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+
+ --lv_to_email := LV_TO_EMAIL_DEPT||','||LV_TO_EMAIL_FINANCE||','||LV_TO_EMAIL_SALE;
+ lv_to_email := LV_TO_EMAIL_SALE||',' ||LV_TO_EMAIL_DEPT||',' ||LV_TO_EMAIL_FINANCE;
+  
+
+ IF LV_EMAIL_BODY IS NOT NULL AND LV_TO_EMAIL IS NOT NULL
+ THEN
+    BEGIN
+    l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => lv_to_email,
+		p_cc                 => LV_EMAIL_CC,
+        p_body               => LV_EMAIL_BODY,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER
+        );
+        APEX_MAIL.PUSH_QUEUE;
+END;
+END IF;
+END SEND_EMAIL_FOR_SUBMIT_RETURN_INVENTORY;
+-----------------------------------------------------------------------------------------
+PROCEDURE SEND_EMAIL_FOR_IMPORT_CLAIM_APPROVAL (
+	P_CLAIM_ID          NUMBER,
+	P_CLAIM_DATE        DATE
+)IS
+
+    l_id NUMBER;
+    lv_to_email VARCHAR2(5000);
+    lv_email VARCHAR2(500);
+    lv_created_by VARCHAR2(500);
+    lv_name VARCHAR2(500);
+    lv_query VARCHAR2(4000);
+    lv_claim_amount NUMBER;
+    lv_wf_id NUMBER;
+    lv_seq NUMBER;
+    lv_claim_id NUMBER;
+    lv_claim_date DATE;
+    lv_claim_number VARCHAR2(1000);
+    lv_org_id NUMBER;
+    lv_appr_lvl_hdr_id NUMBER;
+    LV_DIRECT_FLAG NUMBER;
+	LV_EMAIL_HEADER VARCHAR2(1000);
+	LV_EMAIL_BODY CLOB;
+	lv_wf_next_seq_no NUMBER;
+	lv_department VARCHAR2(200);
+	lv_salesmanager VARCHAR2(500);
+    LV_CLAIM_TYPES VARCHAR2(500);
+	LV_LOGIN_URL VARCHAR2(1000);
+	LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+    LV_ORDER_NUMBER  VARCHAR2(1000);
+	LV_EMAIL_CC      VARCHAR2(4000);
+	LV_TABLE_DATA VARCHAR2(10000) := '<tr>
+<td  style="border : 1px solid; text-align: center;"> #ORIGINAL_ORDER_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_TYPE#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON#</td>
+<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+<td  style="border : 1px solid; text-align: center;"> #ITEM_DESCRIPTION#</td>
+<td  style="border : 1px solid; text-align: center;"> #UNIT#</td>
+<td  style="border : 1px solid; text-align: center;"> #VARIETY#</td>
+<td  style="border : 1px solid; text-align: center;"> #REGION#</td>
+<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN#</td>
+<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_AMOUNT# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+<td  style="border : 1px solid; text-align: center;"> #NAME#</td>
+</tr>';
+LV_REPLACED_DATA VARCHAR2(30000); 
+LV_MAX_VALUE     NUMBER;
+LV_SALESMANAGER_ID NUMBER;
+LV_SALES_PERSON_USER_ID NUMBER;
+LV_SALES_PERSON_EMAIL   VARCHAR2(1000);
+LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+BEGIN
+SELECT
+    ch.claim_number,
+    ch.claim_id,
+    wh.appr_lvl_hdr_id,
+    ch.org_id,
+    ch.wf_id,
+    ch.claim_amount,
+    ch.claim_date,
+	ch.wf_next_seq_no,
+	ch.department,
+    ch.salesmanager,
+    (SELECT LOOKUP_VALUE 
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = CH.CLAIM_TYPE) CLAIM_TYPE,
+	CH.SOLD_TO_CUSTOMER_NAME,
+	CH.ORDER_NUMBER
+INTO
+    lv_claim_number,
+    lv_claim_id,
+    lv_appr_lvl_hdr_id,
+    lv_org_id,
+    lv_wf_id,
+    lv_claim_amount,
+    lv_claim_date,
+	lv_wf_next_seq_no,
+	lv_department,
+	lv_salesmanager,
+    LV_CLAIM_TYPES,
+	LV_SOLD_TO_CUSTOMER_NAME,
+    LV_ORDER_NUMBER
+	
+FROM
+    xxtwc_claims_headers        ch,
+    xxtwc_claims_appr_wf_header wh
+WHERE
+        ch.wf_id = wh.wf_id
+    AND claim_id = P_CLAIM_ID;
+	
+	 BEGIN
+            SELECT
+                ald.max_value
+            INTO LV_MAX_VALUE
+            FROM
+                xxtwc_claims_appr_lvl_dtl ald,
+                xxtwc_claims_appr_lvl_hdr alh
+            WHERE
+                    ald.appr_lvl_hdr_id = alh.appr_lvl_hdr_id
+                AND alh.appr_lvl_hdr_id = lv_appr_lvl_hdr_id
+                AND nvl(ald.min_value, 0) = 0
+                AND alh.org_id = lv_org_id; 
+
+        EXCEPTION
+            WHEN OTHERS THEN
+                LV_MAX_VALUE := 0;
+    END;
+	
+	
+	
+	FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+    IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+	
+	
+	
+	IF LV_MAX_VALUE >= lv_claim_amount AND LV_DEPARTMENT NOT IN ('OPERATIONS','QUALITY')
+	THEN
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y'
+    AND GU.GROUP_ID IN
+	(SELECT GROUP_ID
+				FROM XXTWC_CLAIMS_APPR_LVL_DTL ALD, XXTWC_CLAIMS_APPR_LVL_HDR ALH
+	            WHERE ALD.APPR_LVL_HDR_ID = ALH.APPR_LVL_HDR_ID
+				AND ALH.HIERARCHY_NAME = 'Finance'
+				AND lv_claim_amount BETWEEN ALD.MIN_VALUE AND ALD.MAX_VALUE
+				AND ALH.ORG_ID = LV_ORG_ID
+				AND ALD.GROUP_ID  IS NOT NULL);
+			BEGIN
+					SELECT 
+					EMAIL_HEADER,
+					EMAIL_BODY,
+					EMAIL_CC
+					INTO
+					LV_EMAIL_HEADER,
+					LV_EMAIL_BODY,
+					LV_EMAIL_CC
+					FROM 
+					XXTWC_CLAIMS_EMAIL_TEMPLATES
+					WHERE TEMP_CODE = 'SUBMITTED_CLAIM_FOR_FINANCE_APPROVAL';
+			EXCEPTION
+					WHEN OTHERS THEN
+					LV_EMAIL_HEADER := NULL; 
+					LV_EMAIL_BODY := NULL; 
+					LV_EMAIL_CC := NULL;
+			END;                
+ELSE           
+			BEGIN
+				SELECT USER_ID
+				INTO LV_SALESMANAGER_ID
+				FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS
+				WHERE UPPER(EMAIL_ID) = UPPER(lv_salesmanager)
+				AND ACTIVE_FLG = 'Y';
+			EXCEPTION
+			WHEN OTHERS
+			THEN LV_SALESMANAGER_ID := NULL;
+			END;
+    
+    BEGIN
+	SELECT USER_ID
+	INTO LV_SALES_PERSON_USER_ID 
+	FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS
+	WHERE UPPER(EMAIL_ID) = LV_SALES_PERSON_EMAIL
+	AND ACTIVE_FLG = 'Y';
+	EXCEPTION WHEN OTHERS THEN 
+	LV_SALES_PERSON_USER_ID := NULL;
+    END;	
+    
+	IF LV_SALESMANAGER_ID IS NOT NULL
+	THEN LV_TO_EMAIL := lv_salesmanager;
+	ELSIF LV_SALES_PERSON_USER_ID IS NOT NULL
+	THEN LV_TO_EMAIL := LV_SALES_PERSON_EMAIL;
+	ELSE
+	SELECT LISTAGG( EMAIL_ID, ', ') WITHIN GROUP (ORDER BY EMAIL_ID) "EMAIL_ID"
+	INTO LV_TO_EMAIL
+    FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS LG, XXTWC_CLAIMS_APPR_GROUP_USERS GU, XXTWC_CLAIMS_APPR_GROUPS G
+    WHERE LG.USER_ID = GU.USER_ID
+    AND GU.GROUP_ID = G.GROUP_ID
+    AND G.GROUP_NAME = 'Claim Owner'
+    AND GU.STATUS = 1
+    AND LG.ACTIVE_FLG = 'Y';
+	END IF;
+	
+BEGIN
+SELECT 
+EMAIL_HEADER,
+EMAIL_BODY,
+EMAIL_CC
+INTO
+LV_EMAIL_HEADER,
+LV_EMAIL_BODY,
+LV_EMAIL_CC
+FROM 
+XXTWC_CLAIMS_EMAIL_TEMPLATES
+WHERE TEMP_CODE = 'SUBMITTED_CLAIM_FOR_CLAIM_OWNER_APPROVAL';
+EXCEPTION
+        WHEN OTHERS THEN
+        LV_EMAIL_HEADER := NULL; 
+		LV_EMAIL_BODY := NULL; 
+		LV_EMAIL_CC := NULL; 
+END;
+	
+		
+	END IF;
+	--END;
+
+	
+
+    BEGIN
+        SELECT
+        FIRSTNAME || ' ' || (CASE WHEN FIRSTNAME = LASTNAME THEN NULL ELSE LASTNAME END) NAME,
+        EMAIL_ID  
+        INTO 
+        LV_NAME,
+        LV_EMAIL
+        FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L
+        WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+        AND L.CLAIM_ID = LV_CLAIM_ID AND "ACTION" = 'Review Claim and Submit'
+        AND L.STATUS <> 0
+        AND D.ACTIVE_FLG = 'Y';
+    EXCEPTION
+        WHEN OTHERS THEN
+        LV_NAME := NULL;
+        LV_EMAIL := NULL;
+    END;
+	
+	
+    
+BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+END;
+
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL); 
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_CLAIM_TYPES);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#NAME#',LV_NAME);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+
+IF  LV_TO_EMAIL IS NOT NULL AND LV_EMAIL_BODY IS NOT NULL
+THEN
+l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => LV_TO_EMAIL,
+		p_cc                 => LV_EMAIL_CC,
+        p_body               => LV_EMAIL_BODY,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER
+         );
+        APEX_MAIL.PUSH_QUEUE;
+    END IF;
+END SEND_EMAIL_FOR_IMPORT_CLAIM_APPROVAL;
+
+--------------------------------------------------------------------------------
+PROCEDURE SEND_EMAIL_FOR_REASSIGNED_APPROVAL (
+	P_CLAIM_ID          NUMBER
+	--P_CLAIM_DATE        DATE
+)IS
+
+    l_id NUMBER;
+    lv_to_email VARCHAR2(5000);
+    lv_email VARCHAR2(5000);
+    lv_created_by VARCHAR2(5000);
+    lv_name VARCHAR2(5000);
+    lv_query VARCHAR2(4000);
+    lv_claim_amount NUMBER;
+    lv_wf_id NUMBER;
+    lv_seq NUMBER;
+    lv_claim_id NUMBER;
+    lv_claim_date DATE;
+    lv_claim_number VARCHAR2(1000);
+    lv_org_id NUMBER;
+    lv_appr_lvl_hdr_id NUMBER;
+    LV_DIRECT_FLAG NUMBER;
+	LV_EMAIL_HEADER VARCHAR2(1000);
+	LV_EMAIL_BODY CLOB;
+	lv_wf_next_seq_no NUMBER;
+	lv_department VARCHAR2(200);
+	lv_salesmanager VARCHAR2(500);
+    LV_CLAIM_TYPES VARCHAR2(500);
+	LV_LOGIN_URL VARCHAR2(1000);
+	LV_SOLD_TO_CUSTOMER_NAME VARCHAR2(1000);
+    LV_ORDER_NUMBER  VARCHAR2(1000);
+	LV_EMAIL_CC      VARCHAR2(4000);
+	LV_TABLE_DATA VARCHAR2(10000) := '<tr>
+<td  style="border : 1px solid; text-align: center;"> #ORIGINAL_ORDER_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_NUMBER# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_TYPE#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_REASON#</td>
+<td  style="border : 1px solid; text-align: center;"> #CUSTOMER#</td>
+<td  style="border : 1px solid; text-align: center;"> #ITEM_DESCRIPTION#</td>
+<td  style="border : 1px solid; text-align: center;"> #UNIT#</td>
+<td  style="border : 1px solid; text-align: center;"> #VARIETY#</td>
+<td  style="border : 1px solid; text-align: center;"> #REGION#</td>
+<td  style="border : 1px solid; text-align: center;"> #COUNTRY_OF_ORIGIN#</td>
+<td  style="border : 1px solid; text-align: center;"> #SHIPPED_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_QTY#</td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_AMOUNT# </td>
+<td  style="border : 1px solid; text-align: center;"> #CLAIM_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #SETTLEMENT_DATE# </td>
+<td  style="border : 1px solid; text-align: center;"> #LIQUIDATION_DATE#</td>
+<td  style="border : 1px solid; text-align: center;"> #NAME#</td>
+</tr>';
+LV_REPLACED_DATA VARCHAR2(30000); 
+/*LV_MAX_VALUE     NUMBER;
+LV_SALESMANAGER_ID NUMBER;
+LV_SALES_PERSON_USER_ID NUMBER;
+LV_SALES_PERSON_EMAIL   VARCHAR2(1000);*/
+LV_ITEM_COUNTRY_OF_ORIG VARCHAR2(1000) := NULL;
+LV_IMPORT_CLAIM VARCHAR2(1000) := NULL;
+
+BEGIN
+SELECT
+    ch.claim_number,
+    ch.claim_id,
+    wh.appr_lvl_hdr_id,
+    ch.org_id,
+    ch.wf_id,
+    ch.claim_amount,
+    ch.claim_date,
+	ch.wf_next_seq_no,
+	ch.department,
+    ch.salesmanager,
+    (SELECT LOOKUP_VALUE 
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'CLAIM_TYPE'
+    AND STATUS = 1
+    AND LOOKUP_NAME = CH.CLAIM_TYPE) CLAIM_TYPE,
+	CH.SOLD_TO_CUSTOMER_NAME,
+	CH.ORDER_NUMBER
+INTO
+    lv_claim_number,
+    lv_claim_id,
+    lv_appr_lvl_hdr_id,
+    lv_org_id,
+    lv_wf_id,
+    lv_claim_amount,
+    lv_claim_date,
+	lv_wf_next_seq_no,
+	lv_department,
+	lv_salesmanager,
+    LV_CLAIM_TYPES,
+	LV_SOLD_TO_CUSTOMER_NAME,
+    LV_ORDER_NUMBER
+	
+FROM
+    xxtwc_claims_headers        ch,
+    xxtwc_claims_appr_wf_header wh
+WHERE
+        ch.wf_id = wh.wf_id
+    AND claim_id = P_CLAIM_ID;
+	
+	
+	FOR I IN (SELECT  (SELECT 
+						MAX(TRUNC(cont.claims_floor_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+					) as SETTLEMENT_DATE, 
+				
+				(SELECT 
+						MAX(TRUNC(cont.liquidation_due_date))
+						FROM 
+							xxics.xxtwc_import_ticket_container cont,
+							xxics.xxtwc_import_ticket_pallet pal,
+							claims.xxtwc_claims_lpn_lines lpn
+						WHERE cont.container_id = pal.container_id (+)        
+						and pal.invn_attr_b = lpn.pool_number
+						and lpn.claim_id = xcl.claim_id
+                )as LIQUIDATION_DATE, 
+				
+					(SELECT 
+	                  meaning 
+                      FROM fusion.FND_LOOKUP_VALUES 
+                      WHERE LOOKUP_TYPE ='DOO_RETURN_REASON'
+                      AND LANGUAGE ='US'
+                      AND tag IN ('CARRIER','OPERATIONS','QUALITY','SALES')
+                      and ENABLED_FLAG ='Y'
+                      and lookup_code = CLAIM_REASON_CODE )CLAIM_REASON_CODE,
+	                xcl.SHIP_DATE,
+                    xcl.ITEM_COUNTRY_OF_ORIG,
+                    xcl.ITEM_REGION,
+                    xcl.ITEM_VARIETY,
+	                xcl.INVENTORY_ITEM_DESC,
+	                xcl.UOM,
+	                xcl.SHIP_QTY,
+	                xcl.CLAIM_QTY 
+	FROM 
+	XXTWC_CLAIMS_LINES xcl
+	WHERE xcl.claim_id = P_CLAIM_ID AND xcl.CLAIM_QTY <> 0)
+	LOOP
+	LV_REPLACED_DATA := LV_REPLACED_DATA || LV_TABLE_DATA;
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.CLAIM_REASON_CODE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ITEM_DESCRIPTION#',I.INVENTORY_ITEM_DESC);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#UNIT#',I.UOM);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#VARIETY#',I.ITEM_VARIETY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#REGION#',I.ITEM_REGION);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#COUNTRY_OF_ORIGIN#',I.ITEM_COUNTRY_OF_ORIG);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIPPED_QTY#',I.SHIP_QTY);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_QTY#',I.CLAIM_QTY);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_REASON#',I.INVENTORY_ITEM_DESC);
+	--LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SHIP_DATE#',I.SHIP_DATE);
+    LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#SETTLEMENT_DATE#',I.SETTLEMENT_DATE);
+	LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#LIQUIDATION_DATE#',I.LIQUIDATION_DATE);
+    IF I.ITEM_REGION = 'IM' THEN
+	LV_IMPORT_CLAIM := I.ITEM_REGION;
+	END IF;
+	
+	IF LV_ITEM_COUNTRY_OF_ORIG IS NULL THEN 
+	LV_ITEM_COUNTRY_OF_ORIG :=  I.ITEM_COUNTRY_OF_ORIG;
+	END IF;
+	END LOOP;
+	
+			BEGIN 
+			SELECT 
+			LD.EMAIL_ID
+			INTO LV_TO_EMAIL
+			FROM 
+			XXTWC_CLAIMS_REASSIGN_APPROVAL RA, XXTWC_CLAIMS_USER_LOGIN_DETAILS LD
+			WHERE LD.USER_ID = RA.REASSIGN_TO
+            AND RA.CLAIM_ID = P_CLAIM_ID
+            AND RA.WF_NEXT_SEQ_NO  = lv_wf_next_seq_no
+            AND RA.STATUS = 1;
+			END;
+	
+			BEGIN
+					SELECT 
+					EMAIL_HEADER,
+					EMAIL_BODY,
+					EMAIL_CC
+					INTO
+					LV_EMAIL_HEADER,
+					LV_EMAIL_BODY,
+					LV_EMAIL_CC
+					FROM 
+					XXTWC_CLAIMS_EMAIL_TEMPLATES
+					WHERE TEMP_CODE = 'CLAIM_REASSIGNED_FOR_APPROVAL';
+			EXCEPTION
+					WHEN OTHERS THEN
+					LV_EMAIL_HEADER := NULL; 
+					LV_EMAIL_BODY := NULL; 
+					LV_EMAIL_CC := NULL;
+			END;                
+
+
+
+	
+
+    BEGIN
+        SELECT
+        FIRSTNAME || ' ' || (CASE WHEN FIRSTNAME = LASTNAME THEN NULL ELSE LASTNAME END) NAME,
+        EMAIL_ID  
+        INTO 
+        LV_NAME,
+        LV_EMAIL
+        FROM XXTWC_CLAIMS_USER_LOGIN_DETAILS D , XXTWC_CLAIMS_APPR_WF_ACT_LOG L
+        WHERE TO_CHAR(D.USER_ID) = L.ACTIONED_BY
+        AND L.CLAIM_ID = LV_CLAIM_ID AND "ACTION" = 'Review Claim and Submit'
+        AND L.STATUS <> 0
+        AND D.ACTIVE_FLG = 'Y';
+    EXCEPTION
+        WHEN OTHERS THEN
+        LV_NAME := NULL;
+        LV_EMAIL := NULL;
+    END;
+	
+	
+    
+BEGIN
+	SELECT LOOKUP_VALUE 
+    INTO LV_LOGIN_URL
+    from XXTWC_CLAIMS_LOOKUPS 
+    where LOOKUP_TYPE = 'LOGIN_URL'
+    AND STATUS = 1
+    AND LOOKUP_NAME = 'URL';
+	EXCEPTION
+        WHEN OTHERS THEN
+		LV_LOGIN_URL := '#APEX_URL#twc/r/claim-management225/claim-approval';
+END;
+
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '\',NULL); 
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#ORIGINAL_ORDER_NUMBER#',LV_ORDER_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_TYPE#',LV_CLAIM_TYPES);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CUSTOMER#',LV_SOLD_TO_CUSTOMER_NAME);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#CLAIM_DATE#',LV_CLAIM_DATE);
+LV_REPLACED_DATA := REPLACE(LV_REPLACED_DATA, '#NAME#',LV_NAME);
+--LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#EMAIL_ID#',LV_EMAIL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#TABLE_DATA#',LV_REPLACED_DATA);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_NUMBER#',LV_CLAIM_NUMBER);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#CLAIM_AMOUNT#',(to_char(LV_CLAIM_AMOUNT,'FML999G999G999G999G990D00')));
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#NAME#',LV_NAME);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#LOGIN_URL#',LV_LOGIN_URL);
+LV_EMAIL_BODY := REPLACE(LV_EMAIL_BODY, '#APEX_URL#',V('P0_INSTANCE_URL'));
+--LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+IF  LV_IMPORT_CLAIM = 'IM' THEN
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER||'-'||LV_CLAIM_NUMBER||'-'||LV_ITEM_COUNTRY_OF_ORIG);
+ELSE
+LV_EMAIL_HEADER := REPLACE(LV_EMAIL_HEADER, LV_EMAIL_HEADER, '****'|| V('G_ENVIRONMENT')||'**** '||LV_EMAIL_HEADER);
+END IF;
+
+
+IF  LV_TO_EMAIL IS NOT NULL AND LV_EMAIL_BODY IS NOT NULL
+THEN
+l_id := apex_mail.send (
+        P_from               => V('P0_FROM_EMAIL'),
+        p_to                 => LV_TO_EMAIL,
+		p_cc                 => LV_EMAIL_CC,
+        p_body               => LV_EMAIL_BODY,
+		p_body_html          => LV_EMAIL_BODY,
+        p_subj               => LV_EMAIL_HEADER
+         );
+        APEX_MAIL.PUSH_QUEUE;
+    END IF;
+END SEND_EMAIL_FOR_REASSIGNED_APPROVAL;
+
+END XXTWC_CLAIMS_EMAIL_NOTFICATION_PKG;
