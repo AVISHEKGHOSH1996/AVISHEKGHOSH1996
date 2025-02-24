@@ -1,0 +1,102 @@
+
+-------------------------------
+
+CREATE OR REPLACE FUNCTION fact1(p_number in number) 
+RETURN NUMBER 
+IS
+    lv_number NUMBER := p_number;
+    lv_result NUMBER := 1;
+BEGIN
+    FOR i IN 1..lv_number LOOP
+        lv_result := lv_result * i;
+    END LOOP;
+    
+    RETURN lv_result;
+END;
+
+select fact1(5) from dual; 
+---------------------------------------------
+
+create or replace function LEAP_YEAR (P_YEAR IN NUMBER)
+RETURN VARCHAR2
+IS
+begin
+if (mod(P_YEAR,4)=0 and (mod(P_YEAR,400)=0 or mod(P_YEAR,100)!=0)) then
+return 'LEAP YEAR';
+ELSE
+return 'NOT LEAP YEAR';
+END IF;
+end;
+
+SELECT LEAP_YEAR (2004) FROM DUAL;
+
+-------------------------------------------------
+
+DECLARE
+Lv_YEAR NUMBER := 2001;
+BEGIN
+IF (MOD(Lv_YEAR,4)=0 AND (MOD(Lv_YEAR,400)= 0 OR MOD(Lv_YEAR,100)!=0 )) THEN
+DBMS_OUTPUT.PUT_LINE ('LEAP YEAR');
+ELSE
+DBMS_OUTPUT.PUT_LINE ('NOT LEAP YEAR');
+END IF;
+END;
+
+DECLARE
+LV_YEAR VARCHAR2(100);
+BEGIN
+LV_YEAR := :YEAR;
+IF (MOD(LV_YEAR,4)=0 AND (MOD(LV_YEAR,400)=0 OR MOD(LV_YEAR,100)!= 0)) THEN
+DBMS_OUTPUT.PUT_LINE('LEAP');
+ELSE
+DBMS_OUTPUT.PUT_LINE('ALEAP');
+END IF;
+END;
+--------------------------------------------
+DECLARE
+LV_NUMBER NUMBER := 4;
+LV_RESULT NUMBER := 1;
+BEGIN
+FOR I IN 1 .. LV_NUMBER 
+LOOP
+LV_RESULT := LV_RESULT * I;
+END LOOP;
+DBMS_OUTPUT.PUT_LINE(LV_RESULT);
+END;
+--------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION PRIME_NUMBER (P_NUMBER IN NUMBER)
+RETURN VARCHAR2
+IS 
+
+BEGIN
+IF MOD(P_NUMBER,2)=0 THEN 
+--DBMS_OUTPUT.PUT_LINE('PRIME NUMBER');
+RETURN 'PRIME NUMBER';
+ELSE
+--DBMS_OUTPUT.PUT_LINE('NOT PRIME NUMBER');
+RETURN 'NOT PRIME NUMBER';
+END IF;
+END;
+
+SELECT PRIME_NUMBER (3) FROM DUAL;
+----------------------------------------------------------
+
+
+DECLARE
+  lv_string VARCHAR(100) := 'madam';
+  letter VARCHAR(200);
+  reverse_string VARCHAR(100) := ''; -- Initialize reverse_string to an empty string
+BEGIN
+  FOR i IN REVERSE 1.. LENGTH(lv_string) LOOP
+    letter := SUBSTR(lv_string, i, 1);
+    -- concatenate letter to reverse_string without extra space
+    reverse_string := reverse_string || letter;
+  END LOOP;
+
+  IF reverse_string = lv_string THEN
+    dbms_output.Put_line(reverse_string || ' is palindrome');
+  ELSE
+    dbms_output.Put_line(reverse_string || ' is not palindrome');
+  END IF;
+END;
