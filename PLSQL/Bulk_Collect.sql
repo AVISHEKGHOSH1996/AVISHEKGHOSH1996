@@ -66,3 +66,48 @@ BEGIN
     SELECT COUNT (*) INTO tot_rec FROM tut_78;
     DBMS_OUTPUT.PUT_LINE ('Total records inserted are '||tot_rec);
 END;
+-----------------------------------------------------------------------------------------------------------------
+
+
+
+-------------------------------------------------------------------------------------------------------------------
+
+
+/*Write a plsql procedure which have a out parameter that out parameter return all rows of a employee table*/
+-- Create a record type
+CREATE OR REPLACE TYPE emp_rec_type AS OBJECT (
+    EMPNO    NUMBER,
+    ENAME    VARCHAR2(100),
+    JOB      VARCHAR2(100),
+    MGR      NUMBER,
+    HIREDATE DATE,
+    SAL      NUMBER,
+    COMM     NUMBER,
+    DEPTNO   NUMBER
+);
+ 
+--create a collection 
+CREATE OR REPLACE TYPE emp_table_type AS TABLE OF emp_rec_type;
+ 
+--create a procedure
+CREATE OR REPLACE PROCEDURE print_employee_data1(p_output OUT emp_table_type) IS
+BEGIN
+    SELECT emp_rec_type(EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO)
+    BULK COLLECT INTO p_output
+    FROM emp;
+END print_employee_data1;
+ 
+--Call Procedure 
+DECLARE
+    emp_list emp_table_type;
+BEGIN
+    print_employee_data1(emp_list);
+ 
+    FOR i IN 1 .. emp_list.COUNT LOOP
+        DBMS_OUTPUT.PUT_LINE(
+            emp_list(i).empno || ' - ' || emp_list(i).ename || ' - ' || emp_list(i).job
+        );
+    END LOOP;
+
+ 
+END;
